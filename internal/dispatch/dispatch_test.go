@@ -98,6 +98,7 @@ func TestRenderJob_EnvVarsAndLabels(t *testing.T) {
 		"HUBERT_ISSUE",
 		"HUBERT_PR",
 		"HUBERT_MODE",
+		"HUBERT_ROLE",
 		"HUBERT_ITERATION",
 		"HUBERT_AGENT",
 		"HUBERT_MODEL",
@@ -108,6 +109,10 @@ func TestRenderJob_EnvVarsAndLabels(t *testing.T) {
 		if !strings.Contains(out, e) {
 			t.Errorf("missing env var %q in rendered manifest", e)
 		}
+	}
+
+	if !strings.Contains(out, "name: hubert-runner-secrets") {
+		t.Error("missing envFrom secretRef to hubert-runner-secrets in rendered manifest")
 	}
 
 	if !strings.Contains(out, "activeDeadlineSeconds: 7200") {

@@ -20,4 +20,29 @@ read, diff, and adjust.
 4. Edit `.hubert/README.md` at the repo root — see the root `.hubert/README.md.example` in the Hubert repo for the full shape.
 5. Ensure `hubert-is-a-bot` is a collaborator on the repo with the permissions your [branch protection](../../PLAN.md#410-branch-protection-two-identity-details) allows.
 
+## Cluster-side prerequisite: runner Secret
+
+The dispatched runner Jobs expect a Kubernetes Secret named
+`hubert-runner-secrets` in the namespace they land in (default
+`hubert`). The Secret must carry the credentials the runner
+and the CLI backend need to do their work — at minimum:
+
+| Key | Purpose |
+|-----|---------|
+| `HUBERT_GH_TOKEN` | PAT used by the runner to configure git auth and by `gh pr create` inside the pod. Same scope as the GHA secret. |
+| `ANTHROPIC_API_KEY` | Consumed by `claude --print` inside the pod. Required when the chosen agent is `claude`. |
+| `OPENCODE_API_KEY` | Optional. Only needed when an action routes to `agent=opencode`. |
+| `GEMINI_API_KEY` | Optional. Only needed when an action routes to `agent=gemini`. |
+
+Create it with:
+
+```
+kubectl -n hubert create secret generic hubert-runner-secrets \
+  --from-literal=HUBERT_GH_TOKEN=… \
+  --from-literal=ANTHROPIC_API_KEY=…
+```
+
+The Job template mounts it via `envFrom: secretRef` so every
+key becomes an env var inside the pod.
+
 See [PLAN.md §6 Task 5](../../PLAN.md) for the full spec.

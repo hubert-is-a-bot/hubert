@@ -50,6 +50,8 @@ spec:
               value: "{{.PR}}"
             - name: HUBERT_MODE
               value: {{.Mode}}
+            - name: HUBERT_ROLE
+              value: {{.Role}}
             - name: HUBERT_ITERATION
               value: "{{.Iteration}}"
             - name: HUBERT_AGENT
@@ -62,6 +64,10 @@ spec:
               value: "{{.BudgetUSD}}"
             - name: HOME
               value: /opt/data
+          envFrom:
+            - secretRef:
+                name: hubert-runner-secrets
+                optional: false
           resources:
             requests:
               cpu: {{.CPURequest}}
