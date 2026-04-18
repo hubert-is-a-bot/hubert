@@ -35,13 +35,18 @@ to `gha` or `k8s` (unset ≡ `gha`).
    `hubert-ci.yml` into `.github/workflows/` on your default
    branch.
 2. In the repo's **Secrets and variables → Actions**, set:
-   - **Secrets (always):** `HUBERT_GH_TOKEN`, `HUBERT_LLM_KEY`.
-   - **Secrets (k8s target only):** `HUBERT_KUBECONFIG`.
+   - **Always:** `HUBERT_GH_TOKEN`.
+   - **LLM provider keys:** set *at least one* of
+     `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`,
+     `OPENAI_API_KEY`, `GROQ_API_KEY`, `DEEPSEEK_API_KEY`,
+     `CEREBRAS_API_KEY`, `XAI_API_KEY`, `MISTRAL_API_KEY`.
+     Each is passed through to the runner verbatim; unset
+     secrets are ignored. Set multiple if the orchestrator may
+     route different actions to different providers (e.g.
+     OpenRouter free models for execution, Anthropic for
+     reviewer passes).
+   - **k8s target only:** `HUBERT_KUBECONFIG`.
    - **Variables (optional):**
-     - `HUBERT_LLM_ENV` — env var name to receive
-       `HUBERT_LLM_KEY`. Default `OPENROUTER_API_KEY`. Set to
-       `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` to match your
-       provider.
      - `HUBERT_ORCH_AGENT` — CLI used for the orchestrator
        pass. Default `opencode`; also `claude` or `gemini`.
      - `HUBERT_ORCH_MODEL` — model identifier passed to that

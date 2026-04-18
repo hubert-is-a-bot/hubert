@@ -17,12 +17,16 @@
 #                           by hubert-snap, the in-workflow
 #                           `gh` CLI, and `gh workflow run`
 #                           from hubert-dispatch.
-#   HUBERT_LLM_KEY        — API key for the LLM provider driving
-#                           the orchestrator pass and exec runs.
-#                           Provider-neutral: the workflow
-#                           exports it under the env var name
-#                           given by vars.HUBERT_LLM_ENV
-#                           (default OPENROUTER_API_KEY).
+#
+# LLM provider keys (set at least one — whichever matches the
+# model used by your orchestrator and any backend an action may
+# route to). Each secret is passed through verbatim as an env
+# var; empty/unset secrets are ignored. Different actions can
+# route to different providers, so it's fine (and expected) to
+# set several.
+#   OPENROUTER_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY,
+#   OPENAI_API_KEY, GROQ_API_KEY, DEEPSEEK_API_KEY,
+#   CEREBRAS_API_KEY, XAI_API_KEY, MISTRAL_API_KEY.
 #
 # Optional secrets (only when using target=k8s):
 #   HUBERT_KUBECONFIG     — base64-encoded kubeconfig scoped
@@ -34,10 +38,6 @@
 #   HUBERT_TARGET         — execution target: `gha` (default,
 #                           triggers hubert-exec.yml) or `k8s`
 #                           (applies a Kubernetes Job).
-#   HUBERT_LLM_ENV        — env var name to receive HUBERT_LLM_KEY
-#                           (default: OPENROUTER_API_KEY). Set to
-#                           ANTHROPIC_API_KEY, GEMINI_API_KEY, etc.
-#                           to match your provider.
 #   HUBERT_ORCH_AGENT     — CLI used for the orchestrator pass:
 #                           opencode (default), claude, or gemini.
 #   HUBERT_ORCH_MODEL     — model identifier for the orchestrator
@@ -100,18 +100,18 @@ jobs:
       - name: Secret-presence gate
         id: gate
         env:
-          HAVE_LLM_KEY: ${{ secrets.HUBERT_LLM_KEY != '' }}
+          HAVE_ANY_LLM_KEY: ${{ (secrets.OPENROUTER_API_KEY != '' || secrets.ANTHROPIC_API_KEY != '' || secrets.GEMINI_API_KEY != '' || secrets.OPENAI_API_KEY != '' || secrets.GROQ_API_KEY != '' || secrets.DEEPSEEK_API_KEY != '' || secrets.CEREBRAS_API_KEY != '' || secrets.XAI_API_KEY != '' || secrets.MISTRAL_API_KEY != '') }}
           HAVE_KUBECONFIG: ${{ secrets.HUBERT_KUBECONFIG != '' }}
           TARGET: ${{ vars.HUBERT_TARGET || 'gha' }}
         run: |
           set -euo pipefail
           missing=""
-          [ "$HAVE_LLM_KEY" = "true" ] || missing="$missing HUBERT_LLM_KEY"
+          [ "$HAVE_ANY_LLM_KEY" = "true" ] || missing="$missing <any-LLM-provider-key>"
           if [ "$TARGET" = "k8s" ] && [ "$HAVE_KUBECONFIG" != "true" ]; then
             missing="$missing HUBERT_KUBECONFIG"
           fi
           if [ -n "$missing" ]; then
-            echo "::notice::Hubert orchestrator idle — missing secrets:$missing"
+            echo "::notice::Hubert orchestrator idle — missing:$missing"
             echo "ready=false" >> "$GITHUB_OUTPUT"
           else
             echo "ready=true" >> "$GITHUB_OUTPUT"
@@ -170,11 +170,17 @@ jobs:
         env:
           AGENT: ${{ vars.HUBERT_ORCH_AGENT || 'opencode' }}
           MODEL: ${{ vars.HUBERT_ORCH_MODEL || 'openrouter/deepseek/deepseek-chat-v3.1:free' }}
-          LLM_ENV: ${{ vars.HUBERT_LLM_ENV || 'OPENROUTER_API_KEY' }}
-          LLM_KEY: ${{ secrets.HUBERT_LLM_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          ANTHROPIC_API_KEY:  ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY:     ${{ secrets.GEMINI_API_KEY }}
+          OPENAI_API_KEY:     ${{ secrets.OPENAI_API_KEY }}
+          GROQ_API_KEY:       ${{ secrets.GROQ_API_KEY }}
+          DEEPSEEK_API_KEY:   ${{ secrets.DEEPSEEK_API_KEY }}
+          CEREBRAS_API_KEY:   ${{ secrets.CEREBRAS_API_KEY }}
+          XAI_API_KEY:        ${{ secrets.XAI_API_KEY }}
+          MISTRAL_API_KEY:    ${{ secrets.MISTRAL_API_KEY }}
         run: |
           set -euo pipefail
-          export "$LLM_ENV=$LLM_KEY"
           {
             hubert-prompts orchestrator
             printf '\n\n## Current GitHub state snapshot\n\n```json\n'
