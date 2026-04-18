@@ -51,7 +51,7 @@ to `gha` or `k8s` (unset ≡ `gha`).
        pass. Default `opencode`; also `claude` or `gemini`.
      - `HUBERT_ORCH_MODEL` — model identifier passed to that
        CLI. Default
-       `openrouter/deepseek/deepseek-chat-v3.1:free`.
+       `openrouter/z-ai/glm-4.5-air:free`.
      - `HUBERT_TARGET` — execution target. Default `gha`. For
        `k8s` also set `HUBERT_IMAGE` (runner image ref) and
        `HUBERT_NAMESPACE` (default `hubert`).

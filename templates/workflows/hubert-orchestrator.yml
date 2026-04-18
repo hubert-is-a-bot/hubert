@@ -42,7 +42,7 @@
 #                           opencode (default), claude, or gemini.
 #   HUBERT_ORCH_MODEL     — model identifier for the orchestrator
 #                           pass (default:
-#                           openrouter/deepseek/deepseek-chat-v3.1:free).
+#                           openrouter/z-ai/glm-4.5-air:free).
 #   HUBERT_IMAGE          — fully-qualified runner image ref
 #                           (k8s target only).
 #   HUBERT_NAMESPACE      — kubernetes namespace (k8s target
@@ -169,7 +169,7 @@ jobs:
         name: Run orchestrator pass
         env:
           AGENT: ${{ vars.HUBERT_ORCH_AGENT || 'opencode' }}
-          MODEL: ${{ vars.HUBERT_ORCH_MODEL || 'openrouter/deepseek/deepseek-chat-v3.1:free' }}
+          MODEL: ${{ vars.HUBERT_ORCH_MODEL || 'openrouter/z-ai/glm-4.5-air:free' }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           ANTHROPIC_API_KEY:  ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY:     ${{ secrets.GEMINI_API_KEY }}
