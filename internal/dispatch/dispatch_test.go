@@ -1,10 +1,46 @@
 package dispatch
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/hubert-is-a-bot/hubert/internal/githubapi"
 )
+
+type fakeExec struct {
+	calls    [][]string
+	response []byte
+	err      error
+}
+
+func (f *fakeExec) exec(_ context.Context, name string, args ...string) ([]byte, error) {
+	f.calls = append(f.calls, append([]string{name}, args...))
+	return f.response, f.err
+}
+
+func fakeCfg(resp []byte) (Config, *fakeExec) {
+	fe := &fakeExec{response: resp}
+	c := &githubapi.Client{Repo: "owner/name", GH: "gh", Exec: fe.exec}
+	return Config{
+		Repo: "owner/name",
+		GH:   c,
+		Now:  func() time.Time { return time.Date(2026, 4, 18, 12, 0, 0, 0, time.UTC) },
+	}, fe
+}
+
+func containsArg(calls [][]string, substr string) bool {
+	for _, call := range calls {
+		for _, a := range call {
+			if strings.Contains(a, substr) {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 func TestRenderJob_EnvVarsAndLabels(t *testing.T) {
 	d := jobData{
@@ -106,6 +142,87 @@ func TestResolveTier_Unknown(t *testing.T) {
 	_, err := resolveTier("gigantic")
 	if err == nil {
 		t.Error("expected error for unknown tier, got nil")
+	}
+}
+
+func TestApplyReap(t *testing.T) {
+	cfg, fe := fakeCfg([]byte(`{"id":1}`))
+	raw := []byte(`{"action":"reap-stale-lock","issue":42,"run_id":"01HXYRUN"}`)
+	var a Action
+	if err := json.Unmarshal(raw, &a); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyOne(context.Background(), cfg, a); err != nil {
+		t.Fatalf("applyOne reap: %v", err)
+	}
+	if len(fe.calls) != 2 {
+		t.Fatalf("want 2 gh calls (comment + unassign), got %d", len(fe.calls))
+	}
+	if !containsArg(fe.calls[:1], "repos/owner/name/issues/42/comments") {
+		t.Errorf("first call should be PostComment; got %v", fe.calls[0])
+	}
+	if !containsArg(fe.calls[:1], "🤖 hubert-reap 01HXYRUN stale") {
+		t.Errorf("comment body missing expected marker; got %v", fe.calls[0])
+	}
+	if !containsArg(fe.calls[1:], "repos/owner/name/issues/42/assignees") {
+		t.Errorf("second call should be UnassignIssue; got %v", fe.calls[1])
+	}
+	if !containsArg(fe.calls[1:], "assignees[]=hubert-is-a-bot") {
+		t.Errorf("unassign target should be the bot account; got %v", fe.calls[1])
+	}
+}
+
+func TestApplyEscalate(t *testing.T) {
+	cfg, fe := fakeCfg([]byte(`{"id":2}`))
+	raw := []byte(`{"action":"escalate","issue":17,"reason":"iteration cap reached"}`)
+	var a Action
+	if err := json.Unmarshal(raw, &a); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyOne(context.Background(), cfg, a); err != nil {
+		t.Fatalf("applyOne escalate: %v", err)
+	}
+	if len(fe.calls) != 2 {
+		t.Fatalf("want 2 gh calls (comment + label), got %d", len(fe.calls))
+	}
+	if !containsArg(fe.calls[:1], "repos/owner/name/issues/17/comments") {
+		t.Errorf("first call should be PostComment; got %v", fe.calls[0])
+	}
+	if !containsArg(fe.calls[:1], "iteration cap reached") {
+		t.Errorf("reason should appear in comment body; got %v", fe.calls[0])
+	}
+	if !containsArg(fe.calls[1:], "repos/owner/name/issues/17/labels") {
+		t.Errorf("second call should be AddLabel; got %v", fe.calls[1])
+	}
+	if !containsArg(fe.calls[1:], "labels[]=hubert-stuck") {
+		t.Errorf("label should be hubert-stuck; got %v", fe.calls[1])
+	}
+}
+
+func TestApplyNoop(t *testing.T) {
+	cfg, fe := fakeCfg(nil)
+	raw := []byte(`{"action":"noop","reason":"kill switch engaged"}`)
+	var a Action
+	if err := json.Unmarshal(raw, &a); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyOne(context.Background(), cfg, a); err != nil {
+		t.Fatalf("applyOne noop: %v", err)
+	}
+	if len(fe.calls) != 0 {
+		t.Errorf("noop should not touch gh; got %d calls", len(fe.calls))
+	}
+}
+
+func TestApplyReapMissingIssue(t *testing.T) {
+	cfg, _ := fakeCfg(nil)
+	raw := []byte(`{"action":"reap-stale-lock","run_id":"X"}`)
+	var a Action
+	if err := json.Unmarshal(raw, &a); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyOne(context.Background(), cfg, a); err == nil {
+		t.Error("expected error for missing issue, got nil")
 	}
 }
 
