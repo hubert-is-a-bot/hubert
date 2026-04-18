@@ -153,9 +153,11 @@ func TestResolveTier_Unknown(t *testing.T) {
 func TestApplyExecutionGHA(t *testing.T) {
 	cfg, fe := fakeCfg(nil)
 	cfg.Target = TargetGHA
-	cfg.RunID = "01HXRUN"
-	cfg.Branch = "hubert/issue-5-run-01HXRUN"
+	cfg.Branch = "hubert/issue-5"
 	cfg.BudgetUSD = 2.5
+	orig := newRunID
+	newRunID = func() string { return "01HXRUN" }
+	defer func() { newRunID = orig }()
 	raw := []byte(`{"action":"dispatch-execution","issue":5,"mode":"fresh","iteration":0,"agent":"claude","model":"sonnet","tier":"medium"}`)
 	var a Action
 	if err := json.Unmarshal(raw, &a); err != nil {
@@ -169,16 +171,16 @@ func TestApplyExecutionGHA(t *testing.T) {
 	}
 	call := fe.calls[0]
 	must := map[string]string{
-		"hubert-exec.yml":                 "",
-		"--repo":                          "owner/name",
-		"role=execution":                  "",
-		"run_id=01HXRUN":                  "",
-		"mode=fresh":                      "",
-		"issue=5":                         "",
-		"agent=claude":                    "",
-		"model=sonnet":                    "",
-		"branch=hubert/issue-5-run-01HXRUN": "",
-		"budget_usd=2.5":                  "",
+		"hubert-exec.yml":     "",
+		"--repo":              "owner/name",
+		"role=execution":      "",
+		"run_id=01HXRUN":      "",
+		"mode=fresh":          "",
+		"issue=5":             "",
+		"agent=claude":        "",
+		"model=sonnet":        "",
+		"branch=hubert/issue-5": "",
+		"budget_usd=2.5":      "",
 	}
 	for needle := range must {
 		found := false

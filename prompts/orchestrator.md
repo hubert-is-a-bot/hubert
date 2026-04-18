@@ -88,49 +88,52 @@ which of the following applies. Process issues first, then PRs.
 
 Every `dispatch-*` action must name:
 
-- `agent`: `claude`, `opencode`, or `gemini`. Default
-  `claude` unless the task has a reason to route elsewhere
-  (see below). The deployment's image may not have every
-  CLI — if `.hubert/README.md` lists allowed backends, pick
-  one from that list; otherwise default to `claude`.
-- `model`: the model identifier for the chosen agent.
-  Examples: `opus`, `sonnet`, `opencode/big-pickle`,
-  `openai/gpt-5.4`, `gemini-2.5-pro`.
+- `agent`: `opencode`, `claude`, or `gemini`. Default
+  `opencode` — that's the supported agent for the free-tier
+  path and is what the runner image ships. Only pick `claude`
+  or `gemini` if `.hubert/README.md` explicitly lists them as
+  allowed backends for this repo.
+- `model`: the model identifier the chosen agent will load.
+  For `agent=opencode` you must pass a provider-prefixed model
+  spec (e.g. `openrouter/z-ai/glm-4.5-air:free`). **Do not
+  invent model names** — only pick from the list below or
+  from models explicitly called out in `.hubert/README.md`.
 
-**Principle: pick the cheapest model that can plausibly do the
-task well.** This is the stated default, not an aside. Reviewer
-passes, doc edits, and mechanically obvious fixes almost always
-route to a cheap model. Save the expensive models for complex
-refactors, design work, and anything where a previous cheap-
-model attempt has already escalated. Cost matters; a Hubert
-deployment that reflexively picks the most capable model burns
-budget and gets paused sooner.
+Known-good free models when `agent=opencode`:
+- `openrouter/z-ai/glm-4.5-air:free` — strong
+  instruction-follower; a good default for most tasks.
+- `openrouter/qwen/qwen3-coder:free` — coding-tuned; prefer
+  for code-heavy execution runs.
+- `openrouter/qwen/qwen3-next-80b-a3b-instruct:free` — solid
+  generalist 80B; use when reasoning quality matters.
+- `openrouter/openai/gpt-oss-120b:free` — OpenAI open-weights
+  120B; strong instruction-following.
+- `openrouter/meta-llama/llama-3.3-70b-instruct:free` —
+  reliable fallback 70B.
+
+If `.hubert/README.md` pins a specific model list, use only
+from that list.
+
 - `tier`: `small`, `medium`, `large`, `xlarge`. Governs the
   K8s Job's resource limits and deadline. Reviewer jobs are
   almost always `small`; execution jobs default to `medium`.
+  On the GHA execution target `tier` is advisory — every run
+  is one ubuntu-latest GHA runner — but still emit a value
+  for forward compatibility.
 
-Rules of thumb for agent selection:
+**Principle: pick the cheapest model that can plausibly do the
+task well.** Reviewer passes, doc edits, and mechanically
+obvious fixes should route to the smallest free model. Save
+the larger free models (80B+, 120B) for runs where a cheaper
+model has already failed once. A Hubert deployment that
+reflexively picks the heaviest model burns free-tier quota
+and gets rate-limited sooner.
 
-- **Default `agent=claude`** for complex refactors, design
-  work, multi-file changes, anything that's likely to
-  require nontrivial reasoning. Claude Code's tool loop is
-  the best-tested path.
-- **`agent=opencode`** for small scoped changes, doc
-  updates, test scaffolding, reviewer passes on
-  mechanically-obvious PRs — work where free / cheap
-  models (BigPickle, Nemotron, codex-mini) are
-  capable-enough. Saves meaningful money.
-- **`agent=gemini`** when the task needs to verify an
-  external fact — an API surface, a library version, an
-  error message — that Google Search would answer faster
-  than reading the repo.
-
-If the issue has labels the orchestrator can use as hints
-(e.g., `complexity:trivial`, `needs:web-search`,
-`privacy:no-external-llm`), factor those in. A
-`privacy:no-external-llm` label in a project that only
-allows `claude` in its `.hubert/README.md` is an implicit
-"use claude."
+If the issue has hint labels (`complexity:trivial`,
+`needs:web-search`, `privacy:no-external-llm`), factor them
+in. A `privacy:no-external-llm` label in a project that only
+allows a local backend in its `.hubert/README.md` overrides
+the defaults above.
 
 ### Pull requests
 
@@ -175,7 +178,7 @@ next `dispatch-execution` action:
 
 | Marker in the prior comment       | Pivot for the next dispatch                                  |
 | --------------------------------- | ------------------------------------------------------------ |
-| `need-backend: cheaper`           | Pick a cheaper model/backend than last time (e.g., `opus` → `sonnet` → `opencode/big-pickle`). |
+| `need-backend: cheaper`           | Pick a smaller free model than last time (e.g., `openrouter/qwen/qwen3-next-80b-a3b-instruct:free` → `openrouter/z-ai/glm-4.5-air:free` → `openrouter/meta-llama/llama-3.3-70b-instruct:free`). |
 | `need-backend: alternate`         | Switch provider entirely (rate-limit hit on current one).    |
 | `need-tier: larger`               | Bump the K8s `tier` one step (`medium` → `large` → `xlarge`). |
 | `need-backend: cheaper` + depth>3 | Emit `escalate(...)` instead; the issue is not converging.   |
@@ -201,8 +204,8 @@ following form. Anything outside the block is ignored.
 ````
 ```hubert-actions
 [
-  {"action": "dispatch-execution", "issue": 5, "mode": "fresh", "iteration": 0, "agent": "claude", "model": "sonnet", "tier": "medium"},
-  {"action": "dispatch-reviewer", "pr": 8, "agent": "opencode", "model": "opencode/big-pickle", "tier": "small"},
+  {"action": "dispatch-execution", "issue": 5, "mode": "fresh", "iteration": 0, "agent": "opencode", "model": "openrouter/z-ai/glm-4.5-air:free", "tier": "medium"},
+  {"action": "dispatch-reviewer", "pr": 8, "agent": "opencode", "model": "openrouter/qwen/qwen3-coder:free", "tier": "small"},
   {"action": "reap-stale-lock", "issue": 12, "run_id": "01HXY..."},
   {"action": "escalate", "issue": 17, "reason": "iteration cap reached"},
   {"action": "noop", "reason": "no work to do"}

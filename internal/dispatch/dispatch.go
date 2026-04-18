@@ -38,7 +38,6 @@ const (
 // Config controls one dispatch invocation.
 type Config struct {
 	Repo        string
-	RunID       string
 	Branch      string
 	BudgetUSD   float64
 	ActionsFile string
@@ -242,6 +241,17 @@ type runParams struct {
 	Agent     string
 	Model     string
 	Tier      string
+	RunID     string
+}
+
+// newRunID returns a time-ordered, random-suffixed run ID. Each
+// dispatched execution/reviewer gets its own — the orchestrator
+// decides what to dispatch; the dispatcher assigns identity.
+// Tests override this var to get deterministic values.
+var newRunID = func() string {
+	buf := make([]byte, 4)
+	_, _ = rand.Read(buf)
+	return time.Now().UTC().Format("20060102T150405") + "-" + hex.EncodeToString(buf)
 }
 
 func applyExecution(ctx context.Context, cfg Config, a Action) error {
@@ -257,6 +267,7 @@ func applyExecution(ctx context.Context, cfg Config, a Action) error {
 		Agent:     f.Agent,
 		Model:     f.Model,
 		Tier:      f.Tier,
+		RunID:     newRunID(),
 	}
 	return applyRun(ctx, cfg, p)
 }
@@ -273,6 +284,7 @@ func applyReviewer(ctx context.Context, cfg Config, a Action) error {
 		Agent: f.Agent,
 		Model: f.Model,
 		Tier:  f.Tier,
+		RunID: newRunID(),
 	}
 	return applyRun(ctx, cfg, p)
 }
@@ -310,7 +322,7 @@ func dispatchK8s(cfg Config, p runParams) error {
 		Namespace:             cfg.Namespace,
 		Image:                 cfg.Image,
 		ServiceAccount:        cfg.ServiceAccount,
-		RunID:                 cfg.RunID,
+		RunID:                 p.RunID,
 		Repo:                  cfg.Repo,
 		Issue:                 p.Issue,
 		PR:                    p.PR,
@@ -343,7 +355,7 @@ func dispatchGHA(ctx context.Context, cfg Config, p runParams) error {
 	gh := ghClient(cfg)
 	inputs := map[string]string{
 		"role":       p.Role,
-		"run_id":     cfg.RunID,
+		"run_id":     p.RunID,
 		"mode":       p.Mode,
 		"iteration":  strconv.Itoa(p.Iteration),
 		"issue":      strconv.Itoa(p.Issue),
