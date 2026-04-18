@@ -1,0 +1,56 @@
+# Hubert CI workflow (template).
+#
+# Copy this file into .github/workflows/ in any repo Hubert
+# watches. The reviewer agent treats the status of this
+# workflow on a PR's head SHA as ground truth; approving
+# Hubert-opened PRs against a red CI is forbidden by the
+# reviewer prompt.
+#
+# This is the [Now] minimal version: one stage, lint + fast
+# tests only. The shape is intentionally stable so the
+# reviewer's status-check lookup is predictable; adjust the
+# body as your project needs but keep a single named job
+# called `ci` so the reviewer's status rollup matches.
+#
+# Override the build/test/lint commands by editing them here
+# OR by declaring them in .hubert/README.md; the agents prefer
+# the .hubert/README.md values when they differ.
+
+name: hubert-ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hubert-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # TODO: replace the three commands below with your
+      # project's real build / test / lint, matching the
+      # values in .hubert/README.md.
+      - name: build
+        run: |
+          echo "replace me with your project's build command"
+          exit 0
+      - name: test
+        run: |
+          echo "replace me with your project's test command"
+          exit 0
+      - name: lint
+        run: |
+          echo "replace me with your project's lint command"
+          exit 0

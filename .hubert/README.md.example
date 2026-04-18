@@ -1,0 +1,158 @@
+# Hubert config for this repo
+
+> This file lives at `.hubert/README.md` in the default branch
+> of any repo Hubert watches. It is read by the orchestrator,
+> the execution agent, and the reviewer agent on every run, so
+> changes take effect immediately on the next orchestrator pass
+> — no Hubert restart needed. The trusted-user list is NOT in
+> this file; Hubert derives it from the repo's actual GitHub
+> collaborators. See `SECURITY.md` in the Hubert repo for why.
+
+## Build, test, lint
+
+These are the commands the execution agent runs before opening
+a PR, and that the reviewer agent runs before approving one.
+**All of them must pass.** If a command isn't applicable, omit
+it; do not stub it out with `true`.
+
+```
+build:    go build ./...
+test:     go test ./...
+lint:     golangci-lint run
+```
+
+## Cost caps
+
+Per-issue and per-day caps in USD. The execution agent tracks
+its spend against the per-issue cap and aborts before
+exceeding it. `hubert-snap` sums per-repo daily totals from
+`🤖 hubert-cost` comments; the orchestrator refuses to
+dispatch new work once the per-day cap is hit (resets at UTC
+midnight).
+
+```
+budget_per_issue_usd: 5
+budget_per_day_usd:   50
+```
+
+The cost cap is a soft ceiling — because cost is reported
+per-tool-call, a single expensive tool call can overshoot the
+cap by one call's worth. When that happens, the next
+orchestrator pass pivots to a cheaper backend (OpenCode free
+pool) rather than retrying against the same provider.
+
+## Pause and kill switch
+
+Three granularities of stop:
+
+- **Global:** the shared `hubert-config` kill-switch issue
+  labeled `STOP` — Hubert across all watched repos goes
+  quiet immediately.
+- **Per-repo:** a `hubert-paused` label on this repo's
+  kill-switch issue pauses Hubert for this repo only.
+  Handy during migrations or incidents.
+- **Per-issue:** a `hubert-paused` label on any individual
+  issue pauses work on that issue without closing it.
+  In-flight runs complete and lock cleanly; no new work
+  dispatches until the label is removed.
+
+The orchestrator workflow's first step checks all three
+before spending any LLM tokens. Flip a label from your
+phone.
+
+## Merge style
+
+How the reviewer agent should merge approved PRs. One of
+`squash`, `merge`, `rebase`. Defaults to `squash` if omitted.
+
+```
+merge_style: squash
+```
+
+## Branch naming
+
+The pattern Hubert uses when creating branches for new issues.
+`{issue}` is the issue number; `{slug}` is a short kebab-case
+slug derived from the issue title.
+
+```
+branch_pattern: hubert/issue-{issue}-{slug}
+```
+
+## Backend and model preference
+
+Which LLM backends and models the orchestrator is allowed to
+route this project's work to. The deployment image determines
+which CLIs are installed; this config narrows the allowed set
+further for privacy- or quality-sensitive projects.
+
+If `allowed_backends` is omitted, the orchestrator may pick
+any backend the image supports. If `default_model` is omitted,
+the orchestrator picks per task. The orchestrator pass itself
+always runs on `claude` regardless of this setting, since
+planning quality matters and the pass is short.
+
+```
+allowed_backends: [claude, opencode]
+default_model:    claude-opus-4-6
+```
+
+For example, a project that handles sensitive data might set
+`allowed_backends: [claude]` to refuse routing to OpenCode's
+free tier even when the orchestrator would otherwise pick it.
+A cost-sensitive project with mechanical issues might set
+`default_model: opencode/big-pickle` to bias cheaply.
+
+## Notes for the agents
+
+Free-form prose for the orchestrator, execution agent, and
+reviewer agent to read as project-specific context. This is
+where you put the "I care about X, please don't do Y, our
+conventions are Z" guidance you would normally give a new
+human contributor.
+
+The original brief author has strong feelings about
+correctness and completeness. Mention them here if your
+project has similar standards. Mention any test or build
+quirks the agents should know about ("the integration tests
+take 20 minutes, plan accordingly", "lints fail if you don't
+run `go generate ./...` first", etc.).
+
+Example notes for a real project:
+
+> - This is a Go monorepo with Flutter sub-projects under
+>   `mobile/`. Most issues will be backend-only; if you find
+>   yourself touching Flutter, escalate first.
+> - Protobuf schemas are generated; never edit `*.pb.go` by
+>   hand. Run `make proto` after editing `.proto` files.
+> - The integration tests under `tests/integration/` need a
+>   real Postgres; the unit tests don't. CI runs both.
+> - This repo uses git submodules — the runner must
+>   `git submodule update --init --recursive` before build.
+> - We use Conventional Commits. Scope is the package name.
+> - Don't add new dependencies without filing a separate
+>   issue first; dep additions are a human review.
+
+## Reserved for v2 (ignored by v1)
+
+v1 silently ignores these so projects can prototype v2
+features without breaking v1 parsing:
+
+- **`.hubert/agents/*.md`** — per-project agent personas
+  (frontend-developer, schema-migrator, security-auditor,
+  etc.). v2 dispatches load the named persona file as
+  role context on top of the embedded execution prompt.
+  v1 ignores the directory.
+- **Label → persona mapping** block in this README. The
+  block shape is reserved; v1 doesn't parse it. Example
+  of the intended v2 shape:
+
+  ```
+  persona_mapping:
+    area:database: schema-migrator
+    area:frontend: frontend-developer
+    area:security: security-auditor
+  ```
+
+See PLAN.md §8 "v2: per-project agent personas" for the
+full design.

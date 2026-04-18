@@ -1,0 +1,148 @@
+# Hubert orchestrator workflow (template).
+#
+# Copy this file into .github/workflows/ in any repo you want
+# Hubert to watch. On each trigger it:
+#   1. Short-circuits if a hubert-stop label is set on any
+#      open issue in this repo (kill switch).
+#   2. Builds a snapshot of the repo's open issues and PRs.
+#   3. Pipes the snapshot + the embedded orchestrator prompt
+#      to claude --print to produce a structured action list.
+#   4. Hands the action list to hubert-dispatch, which applies
+#      the corresponding Kubernetes Jobs.
+#
+# Required secrets:
+#   HUBERT_GH_TOKEN       — PAT with repo read + issue/PR write
+#                           on this repo. Used by hubert-snap
+#                           and the in-workflow `gh` CLI.
+#   HUBERT_KUBECONFIG     — base64-encoded kubeconfig scoped to
+#                           the `hubert` namespace service
+#                           account. Consumed by hubert-dispatch.
+#   HUBERT_ANTHROPIC_KEY  — Anthropic API key for the
+#                           orchestrator pass (claude --print).
+#
+# Required repo variables (vars.*):
+#   HUBERT_IMAGE          — fully-qualified runner image
+#                           reference (registry/path:tag) that
+#                           the dispatched Jobs will run.
+#   HUBERT_NAMESPACE      — kubernetes namespace (default:
+#                           hubert).
+
+name: hubert-orchestrator
+
+on:
+  issues:
+    types: [opened, edited, labeled, unlabeled, assigned, unassigned, reopened]
+  issue_comment:
+    types: [created, edited]
+  pull_request:
+    types: [opened, edited, labeled, unlabeled, reopened, synchronize, ready_for_review]
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+  check_run:
+    types: [completed]
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: hubert-orchestrator-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  orchestrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Kill-switch check
+        env:
+          GH_TOKEN: ${{ secrets.HUBERT_GH_TOKEN }}
+        run: |
+          set -euo pipefail
+          stopped=$(gh issue list \
+            --repo "${GITHUB_REPOSITORY}" \
+            --label hubert-stop \
+            --state open \
+            --limit 1 \
+            --json number \
+            --jq 'length')
+          if [ "$stopped" != "0" ]; then
+            echo "::notice::hubert-stop label present; exiting"
+            exit 0
+          fi
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Install Hubert binaries
+        run: |
+          set -euo pipefail
+          go install github.com/hubert-is-a-bot/hubert/cmd/hubert-snap@latest
+          go install github.com/hubert-is-a-bot/hubert/cmd/hubert-dispatch@latest
+          go install github.com/hubert-is-a-bot/hubert/cmd/hubert-prompts@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Install claude CLI
+        run: |
+          set -euo pipefail
+          npm install -g @anthropic-ai/claude-code
+          claude --version
+
+      - name: Build snapshot
+        env:
+          GH_TOKEN: ${{ secrets.HUBERT_GH_TOKEN }}
+        run: |
+          hubert-snap -repo "${GITHUB_REPOSITORY}" > "${RUNNER_TEMP}/snapshot.json"
+          wc -c "${RUNNER_TEMP}/snapshot.json"
+
+      - name: Run orchestrator pass
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.HUBERT_ANTHROPIC_KEY }}
+        run: |
+          set -euo pipefail
+          {
+            hubert-prompts orchestrator
+            printf '\n\n## Current GitHub state snapshot\n\n```json\n'
+            cat "${RUNNER_TEMP}/snapshot.json"
+            printf '\n```\n'
+          } > "${RUNNER_TEMP}/input.txt"
+          claude --print --model sonnet < "${RUNNER_TEMP}/input.txt" > "${RUNNER_TEMP}/orchestrator-output.txt"
+
+      - name: Extract action list
+        id: actions
+        run: |
+          set -euo pipefail
+          awk '
+            /^```hubert-actions$/ { inblock=1; next }
+            /^```$/ && inblock { inblock=0; exit }
+            inblock { print }
+          ' "${RUNNER_TEMP}/orchestrator-output.txt" > "${RUNNER_TEMP}/actions.json"
+          if [ ! -s "${RUNNER_TEMP}/actions.json" ]; then
+            echo "::notice::no hubert-actions block in orchestrator output"
+            exit 0
+          fi
+          echo "actions_file=${RUNNER_TEMP}/actions.json" >> "$GITHUB_OUTPUT"
+
+      - name: Write kubeconfig
+        if: ${{ steps.actions.outputs.actions_file != '' }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${{ secrets.HUBERT_KUBECONFIG }}" | base64 -d > "${RUNNER_TEMP}/kubeconfig"
+          echo "KUBECONFIG=${RUNNER_TEMP}/kubeconfig" >> "$GITHUB_ENV"
+
+      - name: Apply actions
+        if: ${{ steps.actions.outputs.actions_file != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.HUBERT_GH_TOKEN }}
+        run: |
+          set -euo pipefail
+          hubert-dispatch \
+            -repo "${GITHUB_REPOSITORY}" \
+            -namespace "${{ vars.HUBERT_NAMESPACE || 'hubert' }}" \
+            -image "${{ vars.HUBERT_IMAGE }}" \
+            -actions "${{ steps.actions.outputs.actions_file }}"

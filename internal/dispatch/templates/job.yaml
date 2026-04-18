@@ -1,0 +1,88 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{.JobName}}
+  namespace: {{.Namespace}}
+  labels:
+    hubert/run-id: {{.RunID}}
+    hubert/repo: {{.Repo}}
+    hubert/issue: "{{.Issue}}"
+    hubert/pr: "{{.PR}}"
+    hubert/agent: {{.Agent}}
+    hubert/mode: {{.Mode}}
+    hubert/role: {{.Role}}
+    app.kubernetes.io/component: runner-job
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: {{.ActiveDeadlineSeconds}}
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        hubert/run-id: {{.RunID}}
+        hubert/repo: {{.Repo}}
+        hubert/role: {{.Role}}
+        app.kubernetes.io/component: runner-job
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{.ServiceAccount}}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10000
+        runAsGroup: 10000
+        fsGroup: 10000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: runner
+          image: {{.Image}}
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/hubert-runner"]
+          env:
+            - name: HUBERT_RUN_ID
+              value: {{.RunID}}
+            - name: HUBERT_REPO
+              value: {{.Repo}}
+            - name: HUBERT_ISSUE
+              value: "{{.Issue}}"
+            - name: HUBERT_PR
+              value: "{{.PR}}"
+            - name: HUBERT_MODE
+              value: {{.Mode}}
+            - name: HUBERT_ITERATION
+              value: "{{.Iteration}}"
+            - name: HUBERT_AGENT
+              value: {{.Agent}}
+            - name: HUBERT_MODEL
+              value: {{.Model}}
+            - name: HUBERT_BRANCH
+              value: {{.Branch}}
+            - name: HUBERT_BUDGET_USD
+              value: "{{.BudgetUSD}}"
+            - name: HOME
+              value: /opt/data
+          resources:
+            requests:
+              cpu: {{.CPURequest}}
+              memory: {{.MemoryRequest}}
+            limits:
+              cpu: {{.CPULimit}}
+              memory: {{.MemoryLimit}}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: data
+              mountPath: /opt/data
+      volumes:
+        - name: data
+          emptyDir:
+            sizeLimit: 8Gi
+      tolerations:
+        - key: kubernetes.io/arch
+          operator: Equal
+          value: amd64
+          effect: NoSchedule
