@@ -19,6 +19,10 @@ import (
 // Iterate mode: clones and checks out cfg.Branch directly.
 // The CLI applies review-response commits on top.
 //
+// Reviewer mode: clones and checks out the PR head via the
+// pull/N/head ref so the reviewer CLI reads the PR's code
+// without needing to know the branch name. No commits.
+//
 // Returns the absolute path of the worktree. Callers set it
 // as the CWD for the CLI shell-out.
 func PrepareWorktree(ctx context.Context, cfg Config, parent string) (string, error) {
@@ -51,6 +55,18 @@ func PrepareWorktree(ctx context.Context, cfg Config, parent string) (string, er
 			if err := runGit(ctx, worktree, "checkout", "-b", cfg.Branch); err != nil {
 				return "", fmt.Errorf("checkout -b %s: %w", cfg.Branch, err)
 			}
+		}
+	case "reviewer":
+		if cfg.PR == 0 {
+			return "", fmt.Errorf("reviewer mode requires a PR number")
+		}
+		ref := fmt.Sprintf("pull/%d/head", cfg.PR)
+		local := fmt.Sprintf("pr-%d", cfg.PR)
+		if err := runGit(ctx, worktree, "fetch", "origin", ref+":"+local); err != nil {
+			return "", fmt.Errorf("fetch %s: %w", ref, err)
+		}
+		if err := runGit(ctx, worktree, "checkout", local); err != nil {
+			return "", fmt.Errorf("checkout %s: %w", local, err)
 		}
 	default:
 		return "", fmt.Errorf("unknown mode %q", cfg.Mode)
