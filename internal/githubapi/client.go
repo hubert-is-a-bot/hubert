@@ -176,6 +176,27 @@ func (c *Client) GetIssue(ctx context.Context, issue int) (*Issue, error) {
 	}, nil
 }
 
+// TriggerWorkflow fires a workflow_dispatch event against the
+// given workflow file on the given ref, passing inputs as
+// -f key=value pairs. The workflow must be on the repo's
+// default branch (or the ref given) and must declare each
+// input in its `on.workflow_dispatch.inputs` section.
+func (c *Client) TriggerWorkflow(ctx context.Context, workflow, ref string, inputs map[string]string) error {
+	if ref == "" {
+		ref = "main"
+	}
+	args := []string{
+		"workflow", "run", workflow,
+		"--repo", c.Repo,
+		"--ref", ref,
+	}
+	for k, v := range inputs {
+		args = append(args, "-f", fmt.Sprintf("%s=%s", k, v))
+	}
+	_, err := c.run(ctx, args...)
+	return err
+}
+
 // ListLabelIssues returns open issue numbers in the repo
 // carrying the given label. Used for kill-switch checks.
 func (c *Client) ListLabelIssues(ctx context.Context, label string) ([]int, error) {

@@ -150,6 +150,82 @@ func TestResolveTier_Unknown(t *testing.T) {
 	}
 }
 
+func TestApplyExecutionGHA(t *testing.T) {
+	cfg, fe := fakeCfg(nil)
+	cfg.Target = TargetGHA
+	cfg.RunID = "01HXRUN"
+	cfg.Branch = "hubert/issue-5-run-01HXRUN"
+	cfg.BudgetUSD = 2.5
+	raw := []byte(`{"action":"dispatch-execution","issue":5,"mode":"fresh","iteration":0,"agent":"claude","model":"sonnet","tier":"medium"}`)
+	var a Action
+	if err := json.Unmarshal(raw, &a); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyOne(context.Background(), cfg, a); err != nil {
+		t.Fatalf("applyOne dispatch-execution: %v", err)
+	}
+	if len(fe.calls) != 1 {
+		t.Fatalf("want 1 gh call (workflow run), got %d", len(fe.calls))
+	}
+	call := fe.calls[0]
+	must := map[string]string{
+		"hubert-exec.yml":                 "",
+		"--repo":                          "owner/name",
+		"role=execution":                  "",
+		"run_id=01HXRUN":                  "",
+		"mode=fresh":                      "",
+		"issue=5":                         "",
+		"agent=claude":                    "",
+		"model=sonnet":                    "",
+		"branch=hubert/issue-5-run-01HXRUN": "",
+		"budget_usd=2.5":                  "",
+	}
+	for needle := range must {
+		found := false
+		for _, arg := range call {
+			if strings.Contains(arg, needle) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("gh workflow run args missing %q; got %v", needle, call)
+		}
+	}
+}
+
+func TestApplyReviewerGHA(t *testing.T) {
+	cfg, fe := fakeCfg(nil)
+	cfg.Target = TargetGHA
+	raw := []byte(`{"action":"dispatch-reviewer","pr":8,"agent":"opencode","model":"opencode/big-pickle","tier":"small"}`)
+	var a Action
+	if err := json.Unmarshal(raw, &a); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyOne(context.Background(), cfg, a); err != nil {
+		t.Fatalf("applyOne dispatch-reviewer: %v", err)
+	}
+	if len(fe.calls) != 1 {
+		t.Fatalf("want 1 gh call, got %d", len(fe.calls))
+	}
+	if !containsArg(fe.calls, "role=reviewer") || !containsArg(fe.calls, "pr=8") {
+		t.Errorf("reviewer workflow-run args wrong: %v", fe.calls[0])
+	}
+}
+
+func TestApplyRunUnknownTarget(t *testing.T) {
+	cfg, _ := fakeCfg(nil)
+	cfg.Target = "mesos"
+	raw := []byte(`{"action":"dispatch-execution","issue":1,"mode":"fresh","iteration":0,"agent":"claude","model":"opus","tier":"medium"}`)
+	var a Action
+	if err := json.Unmarshal(raw, &a); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyOne(context.Background(), cfg, a); err == nil {
+		t.Fatal("expected error for unknown target, got nil")
+	}
+}
+
 func TestApplyReap(t *testing.T) {
 	cfg, fe := fakeCfg([]byte(`{"id":1}`))
 	raw := []byte(`{"action":"reap-stale-lock","issue":42,"run_id":"01HXYRUN"}`)

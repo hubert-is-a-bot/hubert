@@ -26,8 +26,9 @@ import (
 func main() {
 	var cfg dispatch.Config
 	flag.StringVar(&cfg.Repo, "repo", "", "target repository as owner/name")
-	flag.StringVar(&cfg.Namespace, "namespace", "hubert", "kubernetes namespace")
-	flag.StringVar(&cfg.Image, "image", "", "runner container image reference")
+	flag.StringVar(&cfg.Target, "target", dispatch.TargetGHA, "execution target: gha or k8s")
+	flag.StringVar(&cfg.Namespace, "namespace", "hubert", "kubernetes namespace (k8s target only)")
+	flag.StringVar(&cfg.Image, "image", "", "runner container image reference (k8s target only)")
 	flag.StringVar(&cfg.ActionsFile, "actions", "-", "path to hubert-actions JSON (- for stdin)")
 	flag.Parse()
 

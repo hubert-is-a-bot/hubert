@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strconv"
 	"time"
 
 	"github.com/hubert-is-a-bot/hubert/internal/githubapi"
@@ -25,20 +26,36 @@ import (
 // must stay in sync.
 const BotAccount = "hubert-is-a-bot"
 
+// Execution target for dispatch-execution / dispatch-reviewer
+// actions. The [Now] default is "gha" so Hubert can run
+// without a Kubernetes cluster; "k8s" remains wired up for
+// deployments that want resource isolation and tier sizing.
+const (
+	TargetGHA = "gha"
+	TargetK8s = "k8s"
+)
+
 // Config controls one dispatch invocation.
 type Config struct {
-	Repo           string
+	Repo        string
+	RunID       string
+	Branch      string
+	BudgetUSD   float64
+	ActionsFile string
+
+	// Target selects the execution backend: "gha" (default)
+	// triggers hubert-exec.yml via `gh workflow run`; "k8s"
+	// renders a Job and shells to kubectl apply.
+	Target string
+
+	// K8s-only fields (ignored when Target=="gha").
 	Namespace      string
 	Image          string
 	ServiceAccount string
-	RunID          string
-	Branch         string
-	BudgetUSD      float64
-	ActionsFile    string
 
 	// GH is the GitHub client used for reap-stale-lock,
-	// escalate, and noop actions. nil builds a Client bound
-	// to Repo via githubapi.NewClient.
+	// escalate, noop, and (in gha target) workflow triggers.
+	// nil builds a Client bound to Repo via githubapi.NewClient.
 	GH *githubapi.Client
 	// Now is injected by tests; nil uses time.Now.
 	Now func() time.Time
@@ -122,9 +139,9 @@ func Apply(ctx context.Context, cfg Config, actions []Action) error {
 func applyOne(ctx context.Context, cfg Config, a Action) error {
 	switch a.Name {
 	case "dispatch-execution":
-		return applyExecution(cfg, a)
+		return applyExecution(ctx, cfg, a)
 	case "dispatch-reviewer":
-		return applyReviewer(cfg, a)
+		return applyReviewer(ctx, cfg, a)
 	case "reap-stale-lock":
 		return applyReap(ctx, cfg, a)
 	case "escalate":
@@ -213,59 +230,78 @@ func applyNoop(a Action) error {
 	return nil
 }
 
-func applyExecution(cfg Config, a Action) error {
+// runParams is the target-neutral parameter bag for one
+// execution or reviewer run. It bridges the JSON action and
+// the per-target (k8s/gha) trigger.
+type runParams struct {
+	Role      string
+	Mode      string
+	Issue     int
+	PR        int
+	Iteration int
+	Agent     string
+	Model     string
+	Tier      string
+}
+
+func applyExecution(ctx context.Context, cfg Config, a Action) error {
 	var f dispatchExecFields
 	if err := json.Unmarshal(a.Fields, &f); err != nil {
 		return fmt.Errorf("parse dispatch-execution fields: %w", err)
 	}
-	t, err := resolveTier(f.Tier)
-	if err != nil {
-		return err
+	p := runParams{
+		Role:      "execution",
+		Mode:      f.Mode,
+		Issue:     f.Issue,
+		Iteration: f.Iteration,
+		Agent:     f.Agent,
+		Model:     f.Model,
+		Tier:      f.Tier,
 	}
-	jobName, err := newJobName("hubert-exec")
-	if err != nil {
-		return err
-	}
-	d := jobData{
-		JobName:               jobName,
-		Namespace:             cfg.Namespace,
-		Image:                 cfg.Image,
-		ServiceAccount:        cfg.ServiceAccount,
-		RunID:                 cfg.RunID,
-		Repo:                  cfg.Repo,
-		Issue:                 f.Issue,
-		PR:                    0,
-		Agent:                 f.Agent,
-		Model:                 f.Model,
-		Mode:                  f.Mode,
-		Role:                  "execution",
-		Branch:                cfg.Branch,
-		Iteration:             f.Iteration,
-		BudgetUSD:             cfg.BudgetUSD,
-		CPURequest:            t.CPURequest,
-		CPULimit:              t.CPULimit,
-		MemoryRequest:         t.MemoryRequest,
-		MemoryLimit:           t.MemoryLimit,
-		ActiveDeadlineSeconds: t.ActiveDeadlineSeconds,
-	}
-	manifest, err := renderJob(d)
-	if err != nil {
-		return err
-	}
-	log.Printf("dispatch: applying job %s/%s (tier=%s)", cfg.Namespace, jobName, f.Tier)
-	return kubectlApply(cfg.Namespace, manifest)
+	return applyRun(ctx, cfg, p)
 }
 
-func applyReviewer(cfg Config, a Action) error {
+func applyReviewer(ctx context.Context, cfg Config, a Action) error {
 	var f dispatchReviewerFields
 	if err := json.Unmarshal(a.Fields, &f); err != nil {
 		return fmt.Errorf("parse dispatch-reviewer fields: %w", err)
 	}
-	t, err := resolveTier(f.Tier)
+	p := runParams{
+		Role:  "reviewer",
+		Mode:  "reviewer",
+		PR:    f.PR,
+		Agent: f.Agent,
+		Model: f.Model,
+		Tier:  f.Tier,
+	}
+	return applyRun(ctx, cfg, p)
+}
+
+func applyRun(ctx context.Context, cfg Config, p runParams) error {
+	target := cfg.Target
+	if target == "" {
+		target = TargetGHA
+	}
+	switch target {
+	case TargetGHA:
+		return dispatchGHA(ctx, cfg, p)
+	case TargetK8s:
+		return dispatchK8s(cfg, p)
+	default:
+		return fmt.Errorf("unknown dispatch target %q (valid: gha, k8s)", target)
+	}
+}
+
+func dispatchK8s(cfg Config, p runParams) error {
+	t, err := resolveTier(p.Tier)
 	if err != nil {
 		return err
 	}
-	jobName, err := newJobName("hubert-review")
+	prefix := "hubert-exec"
+	if p.Role == "reviewer" {
+		prefix = "hubert-review"
+	}
+	jobName, err := newJobName(prefix)
 	if err != nil {
 		return err
 	}
@@ -276,14 +312,14 @@ func applyReviewer(cfg Config, a Action) error {
 		ServiceAccount:        cfg.ServiceAccount,
 		RunID:                 cfg.RunID,
 		Repo:                  cfg.Repo,
-		Issue:                 0,
-		PR:                    f.PR,
-		Agent:                 f.Agent,
-		Model:                 f.Model,
-		Mode:                  "reviewer",
-		Role:                  "reviewer",
+		Issue:                 p.Issue,
+		PR:                    p.PR,
+		Agent:                 p.Agent,
+		Model:                 p.Model,
+		Mode:                  p.Mode,
+		Role:                  p.Role,
 		Branch:                cfg.Branch,
-		Iteration:             0,
+		Iteration:             p.Iteration,
 		BudgetUSD:             cfg.BudgetUSD,
 		CPURequest:            t.CPURequest,
 		CPULimit:              t.CPULimit,
@@ -295,8 +331,30 @@ func applyReviewer(cfg Config, a Action) error {
 	if err != nil {
 		return err
 	}
-	log.Printf("dispatch: applying job %s/%s (tier=%s)", cfg.Namespace, jobName, f.Tier)
+	log.Printf("dispatch: applying k8s job %s/%s (role=%s tier=%s)", cfg.Namespace, jobName, p.Role, p.Tier)
 	return kubectlApply(cfg.Namespace, manifest)
+}
+
+// dispatchGHA triggers the hubert-exec.yml workflow on the
+// target repo via `gh workflow run`. Every runParams field is
+// passed as an input (string-encoded) so the workflow's runner
+// step can reconstruct the HUBERT_* env vars.
+func dispatchGHA(ctx context.Context, cfg Config, p runParams) error {
+	gh := ghClient(cfg)
+	inputs := map[string]string{
+		"role":       p.Role,
+		"run_id":     cfg.RunID,
+		"mode":       p.Mode,
+		"iteration":  strconv.Itoa(p.Iteration),
+		"issue":      strconv.Itoa(p.Issue),
+		"pr":         strconv.Itoa(p.PR),
+		"agent":      p.Agent,
+		"model":      p.Model,
+		"branch":     cfg.Branch,
+		"budget_usd": strconv.FormatFloat(cfg.BudgetUSD, 'f', -1, 64),
+	}
+	log.Printf("dispatch: triggering gha workflow hubert-exec.yml on %s (role=%s issue=%d pr=%d)", cfg.Repo, p.Role, p.Issue, p.PR)
+	return gh.TriggerWorkflow(ctx, "hubert-exec.yml", "main", inputs)
 }
 
 func resolveTier(name string) (Tier, error) {

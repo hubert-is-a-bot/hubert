@@ -7,25 +7,34 @@
 #   2. Builds a snapshot of the repo's open issues and PRs.
 #   3. Pipes the snapshot + the embedded orchestrator prompt
 #      to claude --print to produce a structured action list.
-#   4. Hands the action list to hubert-dispatch, which applies
-#      the corresponding Kubernetes Jobs.
+#   4. Hands the action list to hubert-dispatch, which (for
+#      the default gha target) triggers hubert-exec.yml via
+#      `gh workflow run` for each dispatch-* action.
 #
 # Required secrets:
-#   HUBERT_GH_TOKEN       — PAT with repo read + issue/PR write
-#                           on this repo. Used by hubert-snap
-#                           and the in-workflow `gh` CLI.
-#   HUBERT_KUBECONFIG     — base64-encoded kubeconfig scoped to
-#                           the `hubert` namespace service
-#                           account. Consumed by hubert-dispatch.
+#   HUBERT_GH_TOKEN       — PAT with repo read + issue/PR/
+#                           actions-write on this repo. Used
+#                           by hubert-snap, the in-workflow
+#                           `gh` CLI, and `gh workflow run`
+#                           from hubert-dispatch.
 #   HUBERT_ANTHROPIC_KEY  — Anthropic API key for the
-#                           orchestrator pass (claude --print).
+#                           orchestrator pass (claude --print)
+#                           and for the hubert-exec.yml runs.
 #
-# Required repo variables (vars.*):
-#   HUBERT_IMAGE          — fully-qualified runner image
-#                           reference (registry/path:tag) that
-#                           the dispatched Jobs will run.
-#   HUBERT_NAMESPACE      — kubernetes namespace (default:
-#                           hubert).
+# Optional secrets (only when using target=k8s):
+#   HUBERT_KUBECONFIG     — base64-encoded kubeconfig scoped
+#                           to the `hubert` namespace service
+#                           account. Required only when
+#                           vars.HUBERT_TARGET is set to `k8s`.
+#
+# Repo variables (vars.*):
+#   HUBERT_TARGET         — execution target: `gha` (default,
+#                           triggers hubert-exec.yml) or `k8s`
+#                           (applies a Kubernetes Job).
+#   HUBERT_IMAGE          — fully-qualified runner image ref
+#                           (k8s target only).
+#   HUBERT_NAMESPACE      — kubernetes namespace (k8s target
+#                           only; default: hubert).
 
 name: hubert-orchestrator
 
@@ -46,8 +55,9 @@ on:
 
 permissions:
   contents: read
-  issues: read
-  pull-requests: read
+  issues: write
+  pull-requests: write
+  actions: write
 
 concurrency:
   group: hubert-orchestrator-${{ github.repository }}
@@ -80,16 +90,20 @@ jobs:
         env:
           HAVE_ANTHROPIC: ${{ secrets.HUBERT_ANTHROPIC_KEY != '' }}
           HAVE_KUBECONFIG: ${{ secrets.HUBERT_KUBECONFIG != '' }}
+          TARGET: ${{ vars.HUBERT_TARGET || 'gha' }}
         run: |
           set -euo pipefail
           missing=""
-          [ "$HAVE_ANTHROPIC" = "true" ]  || missing="$missing HUBERT_ANTHROPIC_KEY"
-          [ "$HAVE_KUBECONFIG" = "true" ] || missing="$missing HUBERT_KUBECONFIG"
+          [ "$HAVE_ANTHROPIC" = "true" ] || missing="$missing HUBERT_ANTHROPIC_KEY"
+          if [ "$TARGET" = "k8s" ] && [ "$HAVE_KUBECONFIG" != "true" ]; then
+            missing="$missing HUBERT_KUBECONFIG"
+          fi
           if [ -n "$missing" ]; then
             echo "::notice::Hubert orchestrator idle — missing secrets:$missing"
             echo "ready=false" >> "$GITHUB_OUTPUT"
           else
             echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "target=$TARGET" >> "$GITHUB_OUTPUT"
           fi
 
       - if: steps.gate.outputs.ready == 'true'
@@ -152,7 +166,7 @@ jobs:
           echo "actions_file=${RUNNER_TEMP}/actions.json" >> "$GITHUB_OUTPUT"
 
       - name: Write kubeconfig
-        if: ${{ steps.actions.outputs.actions_file != '' }}
+        if: ${{ steps.actions.outputs.actions_file != '' && steps.gate.outputs.target == 'k8s' }}
         run: |
           set -euo pipefail
           printf '%s' "${{ secrets.HUBERT_KUBECONFIG }}" | base64 -d > "${RUNNER_TEMP}/kubeconfig"
@@ -166,6 +180,7 @@ jobs:
           set -euo pipefail
           hubert-dispatch \
             -repo "${GITHUB_REPOSITORY}" \
+            -target "${{ steps.gate.outputs.target }}" \
             -namespace "${{ vars.HUBERT_NAMESPACE || 'hubert' }}" \
             -image "${{ vars.HUBERT_IMAGE }}" \
             -actions "${{ steps.actions.outputs.actions_file }}"
