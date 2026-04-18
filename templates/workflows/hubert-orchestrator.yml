@@ -75,11 +75,30 @@ jobs:
             exit 0
           fi
 
-      - uses: actions/setup-go@v5
+      - name: Secret-presence gate
+        id: gate
+        env:
+          HAVE_ANTHROPIC: ${{ secrets.HUBERT_ANTHROPIC_KEY != '' }}
+          HAVE_KUBECONFIG: ${{ secrets.HUBERT_KUBECONFIG != '' }}
+        run: |
+          set -euo pipefail
+          missing=""
+          [ "$HAVE_ANTHROPIC" = "true" ]  || missing="$missing HUBERT_ANTHROPIC_KEY"
+          [ "$HAVE_KUBECONFIG" = "true" ] || missing="$missing HUBERT_KUBECONFIG"
+          if [ -n "$missing" ]; then
+            echo "::notice::Hubert orchestrator idle — missing secrets:$missing"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.gate.outputs.ready == 'true'
+        uses: actions/setup-go@v5
         with:
           go-version: "1.25"
 
-      - name: Install Hubert binaries
+      - if: steps.gate.outputs.ready == 'true'
+        name: Install Hubert binaries
         run: |
           set -euo pipefail
           go install github.com/hubert-is-a-bot/hubert/cmd/hubert-snap@latest
@@ -87,20 +106,23 @@ jobs:
           go install github.com/hubert-is-a-bot/hubert/cmd/hubert-prompts@latest
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
-      - name: Install claude CLI
+      - if: steps.gate.outputs.ready == 'true'
+        name: Install claude CLI
         run: |
           set -euo pipefail
           npm install -g @anthropic-ai/claude-code
           claude --version
 
-      - name: Build snapshot
+      - if: steps.gate.outputs.ready == 'true'
+        name: Build snapshot
         env:
           GH_TOKEN: ${{ secrets.HUBERT_GH_TOKEN }}
         run: |
           hubert-snap -repo "${GITHUB_REPOSITORY}" > "${RUNNER_TEMP}/snapshot.json"
           wc -c "${RUNNER_TEMP}/snapshot.json"
 
-      - name: Run orchestrator pass
+      - if: steps.gate.outputs.ready == 'true'
+        name: Run orchestrator pass
         env:
           ANTHROPIC_API_KEY: ${{ secrets.HUBERT_ANTHROPIC_KEY }}
         run: |
@@ -113,7 +135,8 @@ jobs:
           } > "${RUNNER_TEMP}/input.txt"
           claude --print --model sonnet < "${RUNNER_TEMP}/input.txt" > "${RUNNER_TEMP}/orchestrator-output.txt"
 
-      - name: Extract action list
+      - if: steps.gate.outputs.ready == 'true'
+        name: Extract action list
         id: actions
         run: |
           set -euo pipefail
