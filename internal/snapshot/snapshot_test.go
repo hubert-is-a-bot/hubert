@@ -30,13 +30,17 @@ func newMultiClient(responses [][]byte) *githubapi.Client {
 
 func TestCapture(t *testing.T) {
 	// Responses in call order:
-	// 1. ListOpenIssues
-	// 2. ListIssueComments for issue 1
-	// 3. ListIssueComments for issue 2 (has hubert-stop label)
-	// 4. ListOpenPullRequests
-	// 5. ListPRReviewComments for PR 10
-	// 6. ListCollaborators
+	// 1. ListCollaborators (trust gate evaluated first)
+	// 2. ListOpenIssues
+	// 3. ListIssueComments for issue 1 (alice, trusted)
+	// 4. ListIssueComments for issue 2 (bob, trusted, has hubert-stop)
+	// 5. ListOpenPullRequests
+	// 6. ListPRReviewComments for PR 10 (carol, dropped by trust gate
+	//    — but we still provide a response so the fixture is valid
+	//    if the trust logic is ever relaxed)
 	responses := [][]byte{
+		// ListCollaborators
+		[]byte(`[{"login": "alice", "type": "User"}, {"login": "bob", "type": "User"}]`),
 		// ListOpenIssues
 		[]byte(`[
 			{
@@ -87,12 +91,8 @@ func TestCapture(t *testing.T) {
 				]
 			}
 		]`),
-		// ListPRReviewComments for PR 10
-		[]byte(`[
-			{"id": 200, "user": {"login": "hubert-is-a-bot"}, "body": "🤖 hubert-review ok", "created_at": "2024-01-01T00:00:00Z", "updated_at": "2024-01-01T00:00:00Z"}
-		]`),
-		// ListCollaborators
-		[]byte(`[{"login": "alice", "type": "User"}, {"login": "bob", "type": "User"}]`),
+		// ListPRReviewComments for PR 10 (dropped by trust gate; not called)
+		[]byte(`[]`),
 	}
 
 	client := newMultiClient(responses)
@@ -122,19 +122,10 @@ func TestCapture(t *testing.T) {
 		t.Errorf("Issues[0].Comments[0].ID = %d, want 100", snap.Issues[0].Comments[0].ID)
 	}
 
-	// Pull requests
-	if len(snap.PullRequests) != 1 {
-		t.Fatalf("want 1 PR, got %d", len(snap.PullRequests))
-	}
-	pr := snap.PullRequests[0]
-	if pr.Number != 10 || pr.HeadBranch != "feature" || pr.HeadSHA != "deadbeef" {
-		t.Errorf("PR mismatch: %+v", pr)
-	}
-	if len(pr.ReviewComments) != 1 || pr.ReviewComments[0].ID != 200 {
-		t.Errorf("PR.ReviewComments mismatch: %+v", pr.ReviewComments)
-	}
-	if len(pr.Checks) != 1 || pr.Checks[0].Conclusion != "SUCCESS" {
-		t.Errorf("PR.Checks mismatch: %+v", pr.Checks)
+	// Pull requests: carol is not a collaborator, so the trust
+	// gate filters her PR out entirely.
+	if len(snap.PullRequests) != 0 {
+		t.Fatalf("want 0 PRs (carol is not a collaborator), got %d", len(snap.PullRequests))
 	}
 
 	// Collaborators
@@ -159,13 +150,13 @@ func TestCapture(t *testing.T) {
 
 func TestCaptureNoStop(t *testing.T) {
 	responses := [][]byte{
+		// ListCollaborators — x is trusted
+		[]byte(`[{"login": "x", "type": "User"}]`),
 		// ListOpenIssues — no hubert-stop
 		[]byte(`[{"number": 1, "title": "t", "body": "", "author": {"login": "x"}, "assignees": [], "labels": [], "state": "open", "createdAt": "2024-01-01T00:00:00Z", "updatedAt": "2024-01-01T00:00:00Z"}]`),
 		// ListIssueComments
 		[]byte(`[]`),
 		// ListOpenPullRequests
-		[]byte(`[]`),
-		// ListCollaborators
 		[]byte(`[]`),
 	}
 	client := newMultiClient(responses)
@@ -178,5 +169,35 @@ func TestCaptureNoStop(t *testing.T) {
 	}
 	if snap.KillSwitch.Global != "OK" {
 		t.Errorf("KillSwitch.Global = %q, want OK", snap.KillSwitch.Global)
+	}
+}
+
+// Confirms the trust gate passes bot-authored issues even when
+// the bot is not in the collaborator list — Hubert must be able
+// to dispatch against its own sub-issues.
+func TestCaptureBotIsTrusted(t *testing.T) {
+	responses := [][]byte{
+		// ListCollaborators — bot not listed
+		[]byte(`[{"login": "alice", "type": "User"}]`),
+		// ListOpenIssues — one by bot, one by stranger
+		[]byte(`[
+			{"number": 1, "title": "bot subissue", "body": "", "author": {"login": "hubert-is-a-bot"}, "assignees": [], "labels": [], "state": "open", "createdAt": "2024-01-01T00:00:00Z", "updatedAt": "2024-01-01T00:00:00Z"},
+			{"number": 2, "title": "drive-by", "body": "", "author": {"login": "stranger"}, "assignees": [], "labels": [], "state": "open", "createdAt": "2024-01-01T00:00:00Z", "updatedAt": "2024-01-01T00:00:00Z"}
+		]`),
+		// ListIssueComments for issue 1
+		[]byte(`[]`),
+		// ListOpenPullRequests
+		[]byte(`[]`),
+	}
+	client := newMultiClient(responses)
+	snap, err := Capture(context.Background(), client, "owner/repo")
+	if err != nil {
+		t.Fatalf("Capture: %v", err)
+	}
+	if len(snap.Issues) != 1 {
+		t.Fatalf("want 1 issue (bot kept, stranger dropped), got %d", len(snap.Issues))
+	}
+	if snap.Issues[0].Author.Login != "hubert-is-a-bot" {
+		t.Errorf("kept wrong issue: %+v", snap.Issues[0])
 	}
 }
