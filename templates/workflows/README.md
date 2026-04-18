@@ -35,23 +35,21 @@ to `gha` or `k8s` (unset ≡ `gha`).
    `hubert-ci.yml` into `.github/workflows/` on your default
    branch.
 2. In the repo's **Secrets and variables → Actions**, set:
-   - **Always:** `HUBERT_GH_TOKEN`.
-   - **LLM provider keys:** set *at least one* of
-     `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`,
-     `OPENAI_API_KEY`, `GROQ_API_KEY`, `DEEPSEEK_API_KEY`,
-     `CEREBRAS_API_KEY`, `XAI_API_KEY`, `MISTRAL_API_KEY`.
-     Each is passed through to the runner verbatim; unset
-     secrets are ignored. Set multiple if the orchestrator may
-     route different actions to different providers (e.g.
-     OpenRouter free models for execution, Anthropic for
-     reviewer passes).
+   - **Always:** `HUBERT_GH_TOKEN`, `OPENROUTER_API_KEY`.
+   - **Additional provider keys (optional):** passed through to
+     exec runs verbatim; set whichever match the backends that
+     orchestrator actions may route to — `ANTHROPIC_API_KEY`,
+     `GEMINI_API_KEY`, `OPENAI_API_KEY`, `GROQ_API_KEY`,
+     `DEEPSEEK_API_KEY`, `CEREBRAS_API_KEY`, `XAI_API_KEY`,
+     `MISTRAL_API_KEY`. Unset secrets are ignored.
    - **k8s target only:** `HUBERT_KUBECONFIG`.
    - **Variables (optional):**
-     - `HUBERT_ORCH_AGENT` — CLI used for the orchestrator
-       pass. Default `opencode`; also `claude` or `gemini`.
-     - `HUBERT_ORCH_MODEL` — model identifier passed to that
-       CLI. Default
-       `openrouter/z-ai/glm-4.5-air:free`.
+     - `HUBERT_ORCH_MODEL` — model identifier for the
+       orchestrator pass (default: `z-ai/glm-4.5-air:free`).
+     - `HUBERT_ORCH_API_BASE` — OpenAI-compatible base URL for
+       the orchestrator pass (default:
+       `https://openrouter.ai/api/v1`). Override to target a
+       different OpenAI-API-compatible provider.
      - `HUBERT_TARGET` — execution target. Default `gha`. For
        `k8s` also set `HUBERT_IMAGE` (runner image ref) and
        `HUBERT_NAMESPACE` (default `hubert`).

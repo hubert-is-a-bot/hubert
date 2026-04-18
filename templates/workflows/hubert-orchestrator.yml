@@ -18,15 +18,21 @@
 #                           `gh` CLI, and `gh workflow run`
 #                           from hubert-dispatch.
 #
-# LLM provider keys (set at least one — whichever matches the
-# model used by your orchestrator and any backend an action may
-# route to). Each secret is passed through verbatim as an env
-# var; empty/unset secrets are ignored. Different actions can
-# route to different providers, so it's fine (and expected) to
-# set several.
-#   OPENROUTER_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY,
-#   OPENAI_API_KEY, GROQ_API_KEY, DEEPSEEK_API_KEY,
-#   CEREBRAS_API_KEY, XAI_API_KEY, MISTRAL_API_KEY.
+# LLM provider keys:
+#   OPENROUTER_API_KEY    — used by the orchestrator pass (which
+#                           hits an OpenAI-compatible chat
+#                           completion endpoint directly; default
+#                           is OpenRouter). Required unless
+#                           you override HUBERT_ORCH_API_BASE to
+#                           point at a different provider.
+#
+# Any of these additional keys can be set and will be passed
+# through to exec runs (hubert-exec.yml) verbatim. Different
+# actions can route to different providers, so set whichever
+# match the backends you expect actions to dispatch to:
+#   ANTHROPIC_API_KEY, GEMINI_API_KEY, OPENAI_API_KEY,
+#   GROQ_API_KEY, DEEPSEEK_API_KEY, CEREBRAS_API_KEY,
+#   XAI_API_KEY, MISTRAL_API_KEY.
 #
 # Optional secrets (only when using target=k8s):
 #   HUBERT_KUBECONFIG     — base64-encoded kubeconfig scoped
@@ -38,11 +44,13 @@
 #   HUBERT_TARGET         — execution target: `gha` (default,
 #                           triggers hubert-exec.yml) or `k8s`
 #                           (applies a Kubernetes Job).
-#   HUBERT_ORCH_AGENT     — CLI used for the orchestrator pass:
-#                           opencode (default), claude, or gemini.
 #   HUBERT_ORCH_MODEL     — model identifier for the orchestrator
-#                           pass (default:
-#                           openrouter/z-ai/glm-4.5-air:free).
+#                           pass (default: z-ai/glm-4.5-air:free,
+#                           a free OpenRouter model).
+#   HUBERT_ORCH_API_BASE  — OpenAI-compatible chat-completion
+#                           base URL (default:
+#                           https://openrouter.ai/api/v1). Point
+#                           at any OpenAI-API-compatible provider.
 #   HUBERT_IMAGE          — fully-qualified runner image ref
 #                           (k8s target only).
 #   HUBERT_NAMESPACE      — kubernetes namespace (k8s target
@@ -100,13 +108,13 @@ jobs:
       - name: Secret-presence gate
         id: gate
         env:
-          HAVE_ANY_LLM_KEY: ${{ (secrets.OPENROUTER_API_KEY != '' || secrets.ANTHROPIC_API_KEY != '' || secrets.GEMINI_API_KEY != '' || secrets.OPENAI_API_KEY != '' || secrets.GROQ_API_KEY != '' || secrets.DEEPSEEK_API_KEY != '' || secrets.CEREBRAS_API_KEY != '' || secrets.XAI_API_KEY != '' || secrets.MISTRAL_API_KEY != '') }}
+          HAVE_OPENROUTER: ${{ secrets.OPENROUTER_API_KEY != '' }}
           HAVE_KUBECONFIG: ${{ secrets.HUBERT_KUBECONFIG != '' }}
           TARGET: ${{ vars.HUBERT_TARGET || 'gha' }}
         run: |
           set -euo pipefail
           missing=""
-          [ "$HAVE_ANY_LLM_KEY" = "true" ] || missing="$missing <any-LLM-provider-key>"
+          [ "$HAVE_OPENROUTER" = "true" ] || missing="$missing OPENROUTER_API_KEY"
           if [ "$TARGET" = "k8s" ] && [ "$HAVE_KUBECONFIG" != "true" ]; then
             missing="$missing HUBERT_KUBECONFIG"
           fi
@@ -133,31 +141,6 @@ jobs:
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - if: steps.gate.outputs.ready == 'true'
-        name: Install orchestrator CLI
-        env:
-          AGENT: ${{ vars.HUBERT_ORCH_AGENT || 'opencode' }}
-        run: |
-          set -euo pipefail
-          case "$AGENT" in
-            opencode)
-              npm install -g opencode-ai@latest
-              opencode --version
-              ;;
-            claude)
-              npm install -g @anthropic-ai/claude-code
-              claude --version
-              ;;
-            gemini)
-              npm install -g @google/gemini-cli
-              gemini --version
-              ;;
-            *)
-              echo "unknown HUBERT_ORCH_AGENT: $AGENT" >&2
-              exit 1
-              ;;
-          esac
-
-      - if: steps.gate.outputs.ready == 'true'
         name: Build snapshot
         env:
           GH_TOKEN: ${{ secrets.HUBERT_GH_TOKEN }}
@@ -168,17 +151,13 @@ jobs:
       - if: steps.gate.outputs.ready == 'true'
         name: Run orchestrator pass
         env:
-          AGENT: ${{ vars.HUBERT_ORCH_AGENT || 'opencode' }}
-          MODEL: ${{ vars.HUBERT_ORCH_MODEL || 'openrouter/z-ai/glm-4.5-air:free' }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          ANTHROPIC_API_KEY:  ${{ secrets.ANTHROPIC_API_KEY }}
-          GEMINI_API_KEY:     ${{ secrets.GEMINI_API_KEY }}
-          OPENAI_API_KEY:     ${{ secrets.OPENAI_API_KEY }}
-          GROQ_API_KEY:       ${{ secrets.GROQ_API_KEY }}
-          DEEPSEEK_API_KEY:   ${{ secrets.DEEPSEEK_API_KEY }}
-          CEREBRAS_API_KEY:   ${{ secrets.CEREBRAS_API_KEY }}
-          XAI_API_KEY:        ${{ secrets.XAI_API_KEY }}
-          MISTRAL_API_KEY:    ${{ secrets.MISTRAL_API_KEY }}
+          # Orchestrator uses a plain OpenAI-compatible chat
+          # completion — no agentic tools. OpenRouter is the
+          # default endpoint; point API_BASE / API_KEY at any
+          # OpenAI-compatible provider to swap.
+          MODEL: ${{ vars.HUBERT_ORCH_MODEL || 'z-ai/glm-4.5-air:free' }}
+          API_BASE: ${{ vars.HUBERT_ORCH_API_BASE || 'https://openrouter.ai/api/v1' }}
+          API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           set -euo pipefail
           {
@@ -187,20 +166,20 @@ jobs:
             cat "${RUNNER_TEMP}/snapshot.json"
             printf '\n```\n'
           } > "${RUNNER_TEMP}/input.txt"
-          case "$AGENT" in
-            opencode)
-              opencode run --dangerously-skip-permissions -m "$MODEL" \
-                < "${RUNNER_TEMP}/input.txt" > "${RUNNER_TEMP}/orchestrator-output.txt"
-              ;;
-            claude)
-              claude --print --model "$MODEL" \
-                < "${RUNNER_TEMP}/input.txt" > "${RUNNER_TEMP}/orchestrator-output.txt"
-              ;;
-            gemini)
-              gemini -p - --yolo -m "$MODEL" \
-                < "${RUNNER_TEMP}/input.txt" > "${RUNNER_TEMP}/orchestrator-output.txt"
-              ;;
-          esac
+          jq -n \
+            --arg model "$MODEL" \
+            --rawfile prompt "${RUNNER_TEMP}/input.txt" \
+            '{model: $model, messages: [{role: "user", content: $prompt}]}' \
+            > "${RUNNER_TEMP}/req.json"
+          curl -sfL "$API_BASE/chat/completions" \
+            -H "Authorization: Bearer $API_KEY" \
+            -H "Content-Type: application/json" \
+            --data @"${RUNNER_TEMP}/req.json" \
+            > "${RUNNER_TEMP}/resp.json"
+          jq -r '.choices[0].message.content' < "${RUNNER_TEMP}/resp.json" \
+            > "${RUNNER_TEMP}/orchestrator-output.txt"
+          echo "--- head of orchestrator output ---"
+          head -40 "${RUNNER_TEMP}/orchestrator-output.txt" || true
 
       - if: steps.gate.outputs.ready == 'true'
         name: Extract action list
