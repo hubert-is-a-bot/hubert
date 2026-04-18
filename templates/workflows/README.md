@@ -35,11 +35,21 @@ to `gha` or `k8s` (unset ≡ `gha`).
    `hubert-ci.yml` into `.github/workflows/` on your default
    branch.
 2. In the repo's **Secrets and variables → Actions**, set:
-   - **Secrets (always):** `HUBERT_GH_TOKEN`, `HUBERT_ANTHROPIC_KEY`.
+   - **Secrets (always):** `HUBERT_GH_TOKEN`, `HUBERT_LLM_KEY`.
    - **Secrets (k8s target only):** `HUBERT_KUBECONFIG`.
-   - **Variables:** `HUBERT_TARGET` (optional, defaults to
-     `gha`). For k8s also set `HUBERT_IMAGE` (runner image
-     ref) and `HUBERT_NAMESPACE` (default `hubert`).
+   - **Variables (optional):**
+     - `HUBERT_LLM_ENV` — env var name to receive
+       `HUBERT_LLM_KEY`. Default `OPENROUTER_API_KEY`. Set to
+       `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` to match your
+       provider.
+     - `HUBERT_ORCH_AGENT` — CLI used for the orchestrator
+       pass. Default `opencode`; also `claude` or `gemini`.
+     - `HUBERT_ORCH_MODEL` — model identifier passed to that
+       CLI. Default
+       `openrouter/deepseek/deepseek-chat-v3.1:free`.
+     - `HUBERT_TARGET` — execution target. Default `gha`. For
+       `k8s` also set `HUBERT_IMAGE` (runner image ref) and
+       `HUBERT_NAMESPACE` (default `hubert`).
 3. Adjust the `build` / `test` / `lint` steps in
    `hubert-ci.yml` to match your project, or let
    `.hubert/README.md` override them.
@@ -60,9 +70,9 @@ carry:
 | Key | Purpose |
 |-----|---------|
 | `HUBERT_GH_TOKEN` | PAT used by the runner to configure git auth and by `gh pr create` inside the pod. Same scope as the GHA secret. |
-| `ANTHROPIC_API_KEY` | Consumed by `claude --print` inside the pod. Required when the chosen agent is `claude`. |
-| `OPENCODE_API_KEY` | Optional. Only needed when an action routes to `agent=opencode`. |
-| `GEMINI_API_KEY` | Optional. Only needed when an action routes to `agent=gemini`. |
+| `OPENROUTER_API_KEY` | Consumed by `opencode run` inside the pod when routing to OpenRouter models (the default). |
+| `ANTHROPIC_API_KEY` | Required when the chosen agent is `claude` or when opencode routes to an Anthropic model. |
+| `GEMINI_API_KEY` | Required when the chosen agent is `gemini` or when opencode routes to a Google model. |
 
 Create it with:
 

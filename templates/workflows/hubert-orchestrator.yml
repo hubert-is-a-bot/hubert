@@ -17,9 +17,12 @@
 #                           by hubert-snap, the in-workflow
 #                           `gh` CLI, and `gh workflow run`
 #                           from hubert-dispatch.
-#   HUBERT_ANTHROPIC_KEY  — Anthropic API key for the
-#                           orchestrator pass (claude --print)
-#                           and for the hubert-exec.yml runs.
+#   HUBERT_LLM_KEY        — API key for the LLM provider driving
+#                           the orchestrator pass and exec runs.
+#                           Provider-neutral: the workflow
+#                           exports it under the env var name
+#                           given by vars.HUBERT_LLM_ENV
+#                           (default OPENROUTER_API_KEY).
 #
 # Optional secrets (only when using target=k8s):
 #   HUBERT_KUBECONFIG     — base64-encoded kubeconfig scoped
@@ -31,6 +34,15 @@
 #   HUBERT_TARGET         — execution target: `gha` (default,
 #                           triggers hubert-exec.yml) or `k8s`
 #                           (applies a Kubernetes Job).
+#   HUBERT_LLM_ENV        — env var name to receive HUBERT_LLM_KEY
+#                           (default: OPENROUTER_API_KEY). Set to
+#                           ANTHROPIC_API_KEY, GEMINI_API_KEY, etc.
+#                           to match your provider.
+#   HUBERT_ORCH_AGENT     — CLI used for the orchestrator pass:
+#                           opencode (default), claude, or gemini.
+#   HUBERT_ORCH_MODEL     — model identifier for the orchestrator
+#                           pass (default:
+#                           openrouter/deepseek/deepseek-chat-v3.1:free).
 #   HUBERT_IMAGE          — fully-qualified runner image ref
 #                           (k8s target only).
 #   HUBERT_NAMESPACE      — kubernetes namespace (k8s target
@@ -88,13 +100,13 @@ jobs:
       - name: Secret-presence gate
         id: gate
         env:
-          HAVE_ANTHROPIC: ${{ secrets.HUBERT_ANTHROPIC_KEY != '' }}
+          HAVE_LLM_KEY: ${{ secrets.HUBERT_LLM_KEY != '' }}
           HAVE_KUBECONFIG: ${{ secrets.HUBERT_KUBECONFIG != '' }}
           TARGET: ${{ vars.HUBERT_TARGET || 'gha' }}
         run: |
           set -euo pipefail
           missing=""
-          [ "$HAVE_ANTHROPIC" = "true" ] || missing="$missing HUBERT_ANTHROPIC_KEY"
+          [ "$HAVE_LLM_KEY" = "true" ] || missing="$missing HUBERT_LLM_KEY"
           if [ "$TARGET" = "k8s" ] && [ "$HAVE_KUBECONFIG" != "true" ]; then
             missing="$missing HUBERT_KUBECONFIG"
           fi
@@ -121,11 +133,29 @@ jobs:
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - if: steps.gate.outputs.ready == 'true'
-        name: Install claude CLI
+        name: Install orchestrator CLI
+        env:
+          AGENT: ${{ vars.HUBERT_ORCH_AGENT || 'opencode' }}
         run: |
           set -euo pipefail
-          npm install -g @anthropic-ai/claude-code
-          claude --version
+          case "$AGENT" in
+            opencode)
+              npm install -g opencode-ai@latest
+              opencode --version
+              ;;
+            claude)
+              npm install -g @anthropic-ai/claude-code
+              claude --version
+              ;;
+            gemini)
+              npm install -g @google/gemini-cli
+              gemini --version
+              ;;
+            *)
+              echo "unknown HUBERT_ORCH_AGENT: $AGENT" >&2
+              exit 1
+              ;;
+          esac
 
       - if: steps.gate.outputs.ready == 'true'
         name: Build snapshot
@@ -138,16 +168,33 @@ jobs:
       - if: steps.gate.outputs.ready == 'true'
         name: Run orchestrator pass
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.HUBERT_ANTHROPIC_KEY }}
+          AGENT: ${{ vars.HUBERT_ORCH_AGENT || 'opencode' }}
+          MODEL: ${{ vars.HUBERT_ORCH_MODEL || 'openrouter/deepseek/deepseek-chat-v3.1:free' }}
+          LLM_ENV: ${{ vars.HUBERT_LLM_ENV || 'OPENROUTER_API_KEY' }}
+          LLM_KEY: ${{ secrets.HUBERT_LLM_KEY }}
         run: |
           set -euo pipefail
+          export "$LLM_ENV=$LLM_KEY"
           {
             hubert-prompts orchestrator
             printf '\n\n## Current GitHub state snapshot\n\n```json\n'
             cat "${RUNNER_TEMP}/snapshot.json"
             printf '\n```\n'
           } > "${RUNNER_TEMP}/input.txt"
-          claude --print --model sonnet < "${RUNNER_TEMP}/input.txt" > "${RUNNER_TEMP}/orchestrator-output.txt"
+          case "$AGENT" in
+            opencode)
+              opencode run --dangerously-skip-permissions -m "$MODEL" \
+                < "${RUNNER_TEMP}/input.txt" > "${RUNNER_TEMP}/orchestrator-output.txt"
+              ;;
+            claude)
+              claude --print --model "$MODEL" \
+                < "${RUNNER_TEMP}/input.txt" > "${RUNNER_TEMP}/orchestrator-output.txt"
+              ;;
+            gemini)
+              gemini -p - --yolo -m "$MODEL" \
+                < "${RUNNER_TEMP}/input.txt" > "${RUNNER_TEMP}/orchestrator-output.txt"
+              ;;
+          esac
 
       - if: steps.gate.outputs.ready == 'true'
         name: Extract action list

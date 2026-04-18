@@ -68,7 +68,7 @@ func configFromEnv() runner.Config {
 	}
 	agent := os.Getenv("HUBERT_AGENT")
 	if agent == "" {
-		agent = "claude"
+		agent = "opencode"
 	}
 	role := os.Getenv("HUBERT_ROLE")
 	if role == "" {

@@ -9,11 +9,19 @@
 # internal/dispatch for later.
 #
 # Required secrets (same as hubert-orchestrator.yml):
-#   HUBERT_GH_TOKEN       — PAT used for clone, push, gh.
-#   HUBERT_ANTHROPIC_KEY  — consumed by claude --print.
+#   HUBERT_GH_TOKEN  — PAT used for clone, push, gh.
+#   HUBERT_LLM_KEY   — API key for the LLM provider. The
+#                      workflow exports it under the env var
+#                      name given by vars.HUBERT_LLM_ENV
+#                      (default OPENROUTER_API_KEY). If you use
+#                      multiple providers across actions, set the
+#                      var to whichever env var your default
+#                      backend expects; a separate key per
+#                      provider is not yet modeled.
 #
-# Optional secrets (add as backends are enabled):
-#   OPENCODE_API_KEY, GEMINI_API_KEY.
+# Repo variables (vars.*):
+#   HUBERT_LLM_ENV   — env var name to receive HUBERT_LLM_KEY
+#                      (default: OPENROUTER_API_KEY).
 
 name: hubert-exec
 
@@ -44,9 +52,9 @@ on:
         required: false
         default: "0"
       agent:
-        description: "claude, opencode, or gemini"
+        description: "opencode, claude, or gemini"
         required: true
-        default: claude
+        default: opencode
       model:
         description: "model identifier for the chosen backend"
         required: false
@@ -87,12 +95,29 @@ jobs:
           go install github.com/hubert-is-a-bot/hubert/cmd/hubert-runner@latest
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
-      - name: Install claude CLI
-        if: inputs.agent == 'claude'
+      - name: Install agent CLI
+        env:
+          AGENT: ${{ inputs.agent }}
         run: |
           set -euo pipefail
-          npm install -g @anthropic-ai/claude-code
-          claude --version
+          case "$AGENT" in
+            opencode)
+              npm install -g opencode-ai@latest
+              opencode --version
+              ;;
+            claude)
+              npm install -g @anthropic-ai/claude-code
+              claude --version
+              ;;
+            gemini)
+              npm install -g @google/gemini-cli
+              gemini --version
+              ;;
+            *)
+              echo "unknown agent: $AGENT" >&2
+              exit 1
+              ;;
+          esac
 
       - name: Configure git identity
         run: |
@@ -114,5 +139,9 @@ jobs:
           HUBERT_BUDGET_USD: ${{ inputs.budget_usd }}
           HUBERT_GH_TOKEN: ${{ secrets.HUBERT_GH_TOKEN }}
           GH_TOKEN: ${{ secrets.HUBERT_GH_TOKEN }}
-          ANTHROPIC_API_KEY: ${{ secrets.HUBERT_ANTHROPIC_KEY }}
-        run: hubert-runner
+          LLM_ENV: ${{ vars.HUBERT_LLM_ENV || 'OPENROUTER_API_KEY' }}
+          LLM_KEY: ${{ secrets.HUBERT_LLM_KEY }}
+        run: |
+          set -euo pipefail
+          export "$LLM_ENV=$LLM_KEY"
+          hubert-runner
