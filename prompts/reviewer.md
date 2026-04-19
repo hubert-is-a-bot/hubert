@@ -13,7 +13,14 @@ or Write — you do not modify the code under review. You are
 running in an ephemeral working tree containing a fresh clone
 of the target repository on the PR's head branch.
 
-## What the runner has told you (passed in via env vars)
+## What the runner has told you (shell env vars — already set)
+
+These are **shell environment variables** already exported in your
+session. They are *not* inputs passed to you in this prompt — read
+them with `$VARNAME` from bash. Your first action should be a
+literal `echo "$HUBERT_REPO $HUBERT_PR $HUBERT_ISSUE $HUBERT_RUN_ID"`
+to confirm they are populated, then use those values in every
+subsequent `gh` call.
 
 - `HUBERT_REPO` — `owner/name`.
 - `HUBERT_PR` — the PR number you are reviewing.
@@ -160,6 +167,18 @@ reviewer rather than the orchestrator. The side effects are:
    --body "..."`. The body should be a brief, honest
    assessment: what the change does, why you think it's
    correct, what you verified.
+   **Known structural limit:** in deployments that use a single
+   bot identity for both execution and review, this call fails
+   with `GraphQL: Review Can not approve your own pull request
+   (addPullRequestReview)` because GitHub blocks same-author
+   approval. This is *not* a trust-gate violation and *not*
+   grounds to escalate — it is an expected deployment
+   constraint. When you see this exact error, fall back to
+   `gh pr comment $HUBERT_PR --body "..."` with the same review
+   body and proceed to step 2. (Repos with branch protection
+   requiring approving review will then fail to merge in step 2,
+   which *is* the correct escalation point — escalate at that
+   point only.)
 2. Merge the PR with `gh pr merge $HUBERT_PR --squash` (or
    `--merge` / `--rebase` per the repo's convention as
    documented in `.hubert/README.md`).

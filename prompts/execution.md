@@ -13,7 +13,14 @@ contains a fresh clone of the target repository on the default
 branch. The pod dies when you exit, so anything you want to
 keep must be pushed to GitHub before you finish.
 
-## What the runner has told you (passed in via env vars)
+## What the runner has told you (shell env vars — already set)
+
+These are **shell environment variables** already exported in your
+session. They are *not* inputs passed to you in this prompt — read
+them with `$VARNAME` from bash. Your first action should be a
+literal `echo "$HUBERT_REPO $HUBERT_ISSUE $HUBERT_RUN_ID $HUBERT_MODE"`
+to confirm they are populated, then use those values in every
+subsequent `gh`/`git` call.
 
 - `HUBERT_REPO` — the `owner/name` of the target repository.
 - `HUBERT_ISSUE` — the issue number you are acting on.
