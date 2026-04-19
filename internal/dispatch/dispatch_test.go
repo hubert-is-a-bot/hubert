@@ -197,7 +197,7 @@ func TestApplyExecutionGHA(t *testing.T) {
 }
 
 func TestApplyReviewerGHA(t *testing.T) {
-	cfg, fe := fakeCfg(nil)
+	cfg, fe := fakeCfg([]byte(`{"closingIssuesReferences":[{"number":5}]}`))
 	cfg.Target = TargetGHA
 	raw := []byte(`{"action":"dispatch-reviewer","pr":8,"agent":"opencode","model":"opencode/big-pickle","tier":"small"}`)
 	var a Action
@@ -207,11 +207,14 @@ func TestApplyReviewerGHA(t *testing.T) {
 	if err := applyOne(context.Background(), cfg, a); err != nil {
 		t.Fatalf("applyOne dispatch-reviewer: %v", err)
 	}
-	if len(fe.calls) != 1 {
-		t.Fatalf("want 1 gh call, got %d", len(fe.calls))
+	if len(fe.calls) != 2 {
+		t.Fatalf("want 2 gh calls (resolve + workflow run), got %d: %v", len(fe.calls), fe.calls)
 	}
 	if !containsArg(fe.calls, "role=reviewer") || !containsArg(fe.calls, "pr=8") {
-		t.Errorf("reviewer workflow-run args wrong: %v", fe.calls[0])
+		t.Errorf("reviewer workflow-run args wrong: %v", fe.calls)
+	}
+	if !containsArg(fe.calls, "issue=5") {
+		t.Errorf("reviewer workflow-run should receive issue resolved from closingIssuesReferences: %v", fe.calls)
 	}
 }
 

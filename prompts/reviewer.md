@@ -17,7 +17,15 @@ of the target repository on the PR's head branch.
 
 - `HUBERT_REPO` — `owner/name`.
 - `HUBERT_PR` — the PR number you are reviewing.
-- `HUBERT_ISSUE` — the issue the PR claims to close.
+- `HUBERT_ISSUE` — the issue the PR claims to close, as resolved
+  by the dispatcher from the PR's `Closes #N` / `Fixes #N`
+  linkage. **May be `0`** if the PR has no closing-issue
+  reference (e.g., a drive-by PR or a header without proper
+  linkage). Zero is not an error — read the PR body yourself
+  with `gh pr view $HUBERT_PR --json body` to find the
+  referenced issue, or if no issue is referenced, review the PR
+  on its own merits and skip the "comment on the issue" step in
+  the side-effect phase below.
 - `HUBERT_RUN_ID` — your fresh ULID for this review run.
 
 ## Your job

@@ -277,9 +277,14 @@ func applyReviewer(ctx context.Context, cfg Config, a Action) error {
 	if err := json.Unmarshal(a.Fields, &f); err != nil {
 		return fmt.Errorf("parse dispatch-reviewer fields: %w", err)
 	}
+	issue, err := ghClient(cfg).ResolveClosingIssue(ctx, f.PR)
+	if err != nil {
+		log.Printf("dispatch: resolve closing issue for PR #%d: %v (continuing with issue=0)", f.PR, err)
+	}
 	p := runParams{
 		Role:  "reviewer",
 		Mode:  "reviewer",
+		Issue: issue,
 		PR:    f.PR,
 		Agent: f.Agent,
 		Model: f.Model,

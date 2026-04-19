@@ -332,6 +332,33 @@ func (c *Client) ListOpenPullRequests(ctx context.Context) ([]PullRequest, error
 	return prs, nil
 }
 
+// ResolveClosingIssue returns the issue number the PR claims to
+// close via a "Closes #N" / "Fixes #N" linkage, as surfaced by
+// GitHub's closingIssuesReferences field. Returns 0 if the PR
+// does not reference a closing issue.
+func (c *Client) ResolveClosingIssue(ctx context.Context, pr int) (int, error) {
+	out, err := c.run(ctx,
+		"pr", "view", fmt.Sprintf("%d", pr),
+		"--repo", c.Repo,
+		"--json", "closingIssuesReferences",
+	)
+	if err != nil {
+		return 0, err
+	}
+	var raw struct {
+		ClosingIssuesReferences []struct {
+			Number int `json:"number"`
+		} `json:"closingIssuesReferences"`
+	}
+	if err := json.Unmarshal(out, &raw); err != nil {
+		return 0, fmt.Errorf("decode closingIssuesReferences: %w", err)
+	}
+	if len(raw.ClosingIssuesReferences) == 0 {
+		return 0, nil
+	}
+	return raw.ClosingIssuesReferences[0].Number, nil
+}
+
 // ListCollaborators returns the logins of all repository collaborators.
 func (c *Client) ListCollaborators(ctx context.Context) ([]User, error) {
 	out, err := c.run(ctx,
