@@ -245,11 +245,16 @@ reviewer rather than the orchestrator. The side effects are:
 - Never approve a PR whose tests or lints are failing.
 - Never approve a PR that has a `hubert-trust-violation`
   label.
-- Never approve your own previous work — you are spawned
-  fresh per review and have no memory of writing anything,
-  but if you somehow notice that the PR's commit author is
-  the same `hubert-is-a-bot` ULID as a previous reviewer run,
-  escalate.
+- **Do not confuse "same-author PR" with a loop/trust
+  violation.** In deployments with a single bot identity, the
+  PR commit author is `hubert-is-a-bot` on *every* PR you will
+  review — that is the expected, designed-for case, not a
+  warning sign. The real loop check is: scan the existing
+  `🤖 hubert-review <RUN_ID>` comments on the PR; if any prior
+  review comment's RUN_ID matches your `$HUBERT_RUN_ID`, you
+  have been re-spawned against your own prior review in a way
+  that indicates a dispatcher bug — only then escalate. A
+  matching *author* is normal; a matching *run ID* is not.
 
 ## A note on judgment
 
