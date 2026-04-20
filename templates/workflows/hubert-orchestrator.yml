@@ -12,11 +12,17 @@
 #      `gh workflow run` for each dispatch-* action.
 #
 # Required secrets:
-#   HUBERT_GH_TOKEN       — PAT with repo read + issue/PR/
-#                           actions-write on this repo. Used
-#                           by hubert-snap, the in-workflow
-#                           `gh` CLI, and `gh workflow run`
-#                           from hubert-dispatch.
+#   HUBERT_APP_ID         — numeric App ID of the GitHub App
+#                           installed on this repo. Each
+#                           orchestrator step mints a fresh
+#                           ~1-hour installation token against
+#                           this App via actions/create-github-
+#                           app-token, so no long-lived PAT
+#                           lives anywhere in this workflow.
+#   HUBERT_APP_PRIVATE_KEY — the full contents of the App's
+#                           downloaded `.pem` private key. Used
+#                           only at token-mint time; never
+#                           passed downstream.
 #
 # LLM provider keys:
 #   OPENROUTER_API_KEY    — used by the orchestrator pass (which
@@ -74,10 +80,11 @@ on:
   workflow_dispatch:
 
 permissions:
+  # The built-in GITHUB_TOKEN is not used by this workflow —
+  # all GitHub-side side effects go through the minted App
+  # installation token from the `Mint orchestrator App token`
+  # step. Leaving GITHUB_TOKEN scoped to `contents: read` only.
   contents: read
-  issues: write
-  pull-requests: write
-  actions: write
 
 concurrency:
   group: hubert-orchestrator-${{ github.repository }}
@@ -88,9 +95,53 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Kill-switch check
+      - name: Secret-presence gate
+        id: gate
         env:
-          GH_TOKEN: ${{ secrets.HUBERT_GH_TOKEN }}
+          HAVE_APP_ID: ${{ secrets.HUBERT_APP_ID != '' }}
+          HAVE_APP_KEY: ${{ secrets.HUBERT_APP_PRIVATE_KEY != '' }}
+          HAVE_OPENROUTER: ${{ secrets.OPENROUTER_API_KEY != '' }}
+          HAVE_KUBECONFIG: ${{ secrets.HUBERT_KUBECONFIG != '' }}
+          TARGET: ${{ vars.HUBERT_TARGET || 'gha' }}
+        run: |
+          set -euo pipefail
+          missing=""
+          [ "$HAVE_APP_ID" = "true" ]     || missing="$missing HUBERT_APP_ID"
+          [ "$HAVE_APP_KEY" = "true" ]    || missing="$missing HUBERT_APP_PRIVATE_KEY"
+          [ "$HAVE_OPENROUTER" = "true" ] || missing="$missing OPENROUTER_API_KEY"
+          if [ "$TARGET" = "k8s" ] && [ "$HAVE_KUBECONFIG" != "true" ]; then
+            missing="$missing HUBERT_KUBECONFIG"
+          fi
+          if [ -n "$missing" ]; then
+            echo "::notice::Hubert orchestrator idle — missing:$missing"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "target=$TARGET" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.gate.outputs.ready == 'true'
+        name: Mint orchestrator App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.HUBERT_APP_ID }}
+          private-key: ${{ secrets.HUBERT_APP_PRIVATE_KEY }}
+          # Orchestrator needs: issue/PR metadata + labels
+          # (issues:write, pull-requests:write), dispatch
+          # triggers on hubert-exec.yml (actions:write), and
+          # commits+checks read for snapshot+routing
+          # (contents:read, checks:read).
+          permission-issues: write
+          permission-pull-requests: write
+          permission-actions: write
+          permission-contents: read
+          permission-checks: read
+
+      - if: steps.gate.outputs.ready == 'true'
+        name: Kill-switch check
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
           stopped=$(gh issue list \
@@ -103,27 +154,6 @@ jobs:
           if [ "$stopped" != "0" ]; then
             echo "::notice::hubert-stop label present; exiting"
             exit 0
-          fi
-
-      - name: Secret-presence gate
-        id: gate
-        env:
-          HAVE_OPENROUTER: ${{ secrets.OPENROUTER_API_KEY != '' }}
-          HAVE_KUBECONFIG: ${{ secrets.HUBERT_KUBECONFIG != '' }}
-          TARGET: ${{ vars.HUBERT_TARGET || 'gha' }}
-        run: |
-          set -euo pipefail
-          missing=""
-          [ "$HAVE_OPENROUTER" = "true" ] || missing="$missing OPENROUTER_API_KEY"
-          if [ "$TARGET" = "k8s" ] && [ "$HAVE_KUBECONFIG" != "true" ]; then
-            missing="$missing HUBERT_KUBECONFIG"
-          fi
-          if [ -n "$missing" ]; then
-            echo "::notice::Hubert orchestrator idle — missing:$missing"
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "ready=true" >> "$GITHUB_OUTPUT"
-            echo "target=$TARGET" >> "$GITHUB_OUTPUT"
           fi
 
       - if: steps.gate.outputs.ready == 'true'
@@ -143,7 +173,7 @@ jobs:
       - if: steps.gate.outputs.ready == 'true'
         name: Build snapshot
         env:
-          GH_TOKEN: ${{ secrets.HUBERT_GH_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           hubert-snap -repo "${GITHUB_REPOSITORY}" > "${RUNNER_TEMP}/snapshot.json"
           wc -c "${RUNNER_TEMP}/snapshot.json"
@@ -207,7 +237,7 @@ jobs:
       - name: Apply actions
         if: ${{ steps.actions.outputs.actions_file != '' }}
         env:
-          GH_TOKEN: ${{ secrets.HUBERT_GH_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
           hubert-dispatch \

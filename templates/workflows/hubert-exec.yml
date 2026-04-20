@@ -9,7 +9,25 @@
 # internal/dispatch for later.
 #
 # Required secrets (same as hubert-orchestrator.yml):
-#   HUBERT_GH_TOKEN  — PAT used for clone, push, gh.
+#   HUBERT_APP_ID         — numeric App ID of the GitHub App
+#                           installed on this repo.
+#   HUBERT_APP_PRIVATE_KEY — the full contents of the App's
+#                           downloaded `.pem` private key.
+#
+# This workflow mints a role-scoped installation token at
+# the start of every run:
+#   role=execution → contents:write + pull-requests:write +
+#                    issues:write (can open PR, push, comment)
+#   role=reviewer  → contents:read + pull-requests:read +
+#                    issues:write (can read + comment, but
+#                    NOT approve/merge — that's enforced at the
+#                    API layer, not by prompt discipline)
+#
+# After the reviewer's LLM run, a follow-up step reads its
+# structured verdict comment and — using the workflow's own
+# GITHUB_TOKEN (a different identity from the reviewer App
+# installation) — performs the actual approve/merge or label
+# flip. The LLM never holds merge capability.
 #
 # LLM provider keys (set at least one — whichever matches the
 # model used by actions that route here). Each secret is passed
@@ -82,6 +100,22 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
+      - name: Mint role-scoped App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.HUBERT_APP_ID }}
+          private-key: ${{ secrets.HUBERT_APP_PRIVATE_KEY }}
+          # Role-dependent permission narrowing. Reviewer gets
+          # read-only on code + PRs so it physically cannot
+          # approve or merge — the verdict-apply step below
+          # (which uses GITHUB_TOKEN, a different identity)
+          # performs those actions based on the reviewer's
+          # structured verdict comment.
+          permission-contents: ${{ inputs.role == 'reviewer' && 'read' || 'write' }}
+          permission-pull-requests: ${{ inputs.role == 'reviewer' && 'read' || 'write' }}
+          permission-issues: write
+
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
@@ -134,8 +168,8 @@ jobs:
           HUBERT_MODEL: ${{ inputs.model }}
           HUBERT_BRANCH: ${{ inputs.branch }}
           HUBERT_BUDGET_USD: ${{ inputs.budget_usd }}
-          HUBERT_GH_TOKEN: ${{ secrets.HUBERT_GH_TOKEN }}
-          GH_TOKEN: ${{ secrets.HUBERT_GH_TOKEN }}
+          HUBERT_GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           ANTHROPIC_API_KEY:  ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY:     ${{ secrets.GEMINI_API_KEY }}
@@ -146,3 +180,59 @@ jobs:
           XAI_API_KEY:        ${{ secrets.XAI_API_KEY }}
           MISTRAL_API_KEY:    ${{ secrets.MISTRAL_API_KEY }}
         run: hubert-runner
+
+      # --- Reviewer-only follow-up: take the action. -------------
+      # The reviewer LLM's token is scoped without pull-requests:
+      # write, so it physically cannot approve or merge. It posts
+      # a structured verdict comment starting with
+      #   🤖 hubert-verdict <run_id> <kind>
+      # …and exits. This step parses that comment and takes the
+      # matching action using GITHUB_TOKEN (whose identity,
+      # github-actions[bot], is *different* from the exec App's
+      # installation identity — so same-author approval block
+      # doesn't fire).
+      - name: Apply reviewer verdict
+        if: inputs.role == 'reviewer'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HUBERT_PR: ${{ inputs.pr }}
+          HUBERT_ISSUE: ${{ inputs.issue }}
+          HUBERT_RUN_ID: ${{ inputs.run_id }}
+          MERGE_STYLE: ${{ vars.HUBERT_MERGE_STYLE || 'squash' }}
+        run: |
+          set -euo pipefail
+          body=$(gh pr view "$HUBERT_PR" --json comments \
+            | jq -r --arg rid "$HUBERT_RUN_ID" \
+              '[.comments[] | select(.body | startswith("🤖 hubert-verdict " + $rid))] | (last.body // "")')
+          if [ -z "$body" ]; then
+            echo "::warning::no verdict comment for run $HUBERT_RUN_ID on PR #$HUBERT_PR; leaving PR untouched"
+            exit 0
+          fi
+          kind=$(printf '%s' "$body" | head -n1 | awk '{print $4}')
+          echo "reviewer verdict: $kind"
+          case "$kind" in
+            approve)
+              gh pr review "$HUBERT_PR" --approve \
+                --body "Approved per reviewer verdict (run $HUBERT_RUN_ID)."
+              gh pr merge "$HUBERT_PR" --"$MERGE_STYLE" --delete-branch
+              if [ "$HUBERT_ISSUE" != "0" ]; then
+                gh issue edit "$HUBERT_ISSUE" --remove-label hubert-review || true
+              fi
+              ;;
+            request-changes)
+              if [ "$HUBERT_ISSUE" != "0" ]; then
+                gh issue edit "$HUBERT_ISSUE" --remove-label hubert-review || true
+                gh issue edit "$HUBERT_ISSUE" --add-label hubert-changes-requested
+              fi
+              ;;
+            escalate)
+              if [ "$HUBERT_ISSUE" != "0" ]; then
+                gh issue edit "$HUBERT_ISSUE" --remove-label hubert-review || true
+                gh issue edit "$HUBERT_ISSUE" --add-label hubert-stuck
+              fi
+              ;;
+            *)
+              echo "::warning::unrecognized verdict kind '$kind' on PR #$HUBERT_PR; leaving as-is"
+              exit 0
+              ;;
+          esac

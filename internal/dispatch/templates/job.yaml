@@ -65,6 +65,12 @@ spec:
             - name: HOME
               value: /opt/data
           envFrom:
+            # Baseline secret holds provider API keys. The per-run
+            # short-lived HUBERT_GH_TOKEN is NOT in here — under
+            # the GitHub-App auth model, the orchestrator mints a
+            # ~1-hour installation token per dispatch. K8s target
+            # will inject it as an explicit env var; see
+            # TODO(k8s-app-token-injection) in internal/dispatch.
             - secretRef:
                 name: hubert-runner-secrets
                 optional: false
